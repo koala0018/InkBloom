@@ -1,0 +1,6 @@
+.engine-switch{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.engine-switch label{margin:0!important}
+.engine-switch input{display:none}
+.engine-switch span{display:flex;flex-direction:column;gap:3px;border:1px solid var(--line);padding:9px;border-radius:8px;cursor:pointer}
+.engine-switch input:checked+span{border-color:var(--accent);background:#e5734712}
+.engine-switch small{color:var(--muted);font-size:9px}

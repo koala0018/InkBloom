@@ -1,0 +1,14 @@
+.research-*/
+build/
+dist/
+release/
+.deps/
+.venv-build/
+.ai-build/
+work/
+output/
+models/
+assets/models/*.onnx
+__pycache__/
+*.spec
+*.pyc
