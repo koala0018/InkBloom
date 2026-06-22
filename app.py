@@ -60,21 +60,24 @@ def create_job():
         item.save(path)
         saved.append(path)
 
-    reference_file = request.files.get("reference")
-    reference = None
-    if reference_file and reference_file.filename:
-        ref_name = secure_filename(reference_file.filename) or "reference.png"
-        reference = upload_dir / f"{stamp}_ref_{ref_name}"
+    references: list[Path] = []
+    for index, reference_file in enumerate(request.files.getlist("references")):
+        if not reference_file.filename:
+            continue
+        ref_name = secure_filename(reference_file.filename) or f"reference_{index}.png"
+        reference = upload_dir / f"{stamp}_ref_{index}_{ref_name}"
         reference_file.save(reference)
+        references.append(reference)
 
     first_name = Path(files[0].filename or "comic").stem
     settings = ColorSettings(
-        engine=request.form.get("engine", "ai"),
-        saturation=float(request.form.get("saturation", 0.82)),
-        strength=float(request.form.get("strength", 0.88)),
-        line_protection=float(request.form.get("line_protection", 0.92)),
+        engine=request.form.get("engine", "manganinja"),
+        saturation=float(request.form.get("saturation", 1.05)),
+        strength=float(request.form.get("strength", 0.95)),
+        line_protection=float(request.form.get("line_protection", 0.82)),
+        reference_strength=float(request.form.get("reference_strength", 0.90)),
     )
-    job = manager.create(saved, reference, request.form.get("title") or first_name, settings)
+    job = manager.create(saved, references, request.form.get("title") or first_name, settings)
     return jsonify({"job_id": job.id})
 
 

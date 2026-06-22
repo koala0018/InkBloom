@@ -15,82 +15,168 @@ from .paths import resource_path
 @dataclass
 class ColorSettings:
     engine: str = "ai"
-    saturation: float = 0.82
-    strength: float = 0.88
-    line_protection: float = 0.92
+    saturation: float = 1.05
+    strength: float = 0.95
+    line_protection: float = 0.82
+    reference_strength: float = 0.90
 
 
-class ReferencePaletteColorizer:
-    """Fast, deterministic CPU reference colorizer with edge-aware chroma propagation."""
+def _rgb(path: Path) -> np.ndarray:
+    return np.asarray(Image.open(path).convert("RGB"), dtype=np.uint8)
 
-    def __init__(self, reference: Path | None, settings: ColorSettings):
-        self.settings = settings
-        self.palette = self._extract_palette(reference) if reference else self._default_palette()
+
+class RegionReferenceMatcher:
+    """Transfer colors from multiple references using page and region similarity."""
+
+    FEATURE_WEIGHTS = np.array([3.2, 1.6, 2.0, 1.15, 1.15, 0.25], np.float32)
+
+    def __init__(self, references: list[Path]):
+        if not references:
+            raise ValueError("至少需要一张彩色样例图")
+        self.references = [self._describe(_rgb(path), include_color=True) for path in references]
 
     @staticmethod
-    def _default_palette() -> np.ndarray:
-        return np.array([
-            [245, 203, 181], [198, 116, 93], [87, 62, 72], [84, 122, 153],
-            [112, 151, 116], [224, 181, 91], [151, 109, 151], [55, 62, 75],
-        ], dtype=np.uint8)
+    def _resize(rgb: np.ndarray, max_side: int = 720) -> np.ndarray:
+        scale = min(1.0, max_side / max(rgb.shape[:2]))
+        if scale == 1.0:
+            return rgb
+        return cv2.resize(rgb, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
 
-    def _extract_palette(self, reference: Path) -> np.ndarray:
-        image = cv2.imread(str(reference), cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError("无法读取参考图")
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        scale = min(1.0, 640 / max(image.shape[:2]))
-        if scale < 1:
-            image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-        hsv = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
-        mask = (hsv[..., 1] > 32) & (hsv[..., 2] > 35) & (hsv[..., 2] < 250)
-        pixels = image[mask]
-        if len(pixels) < 64:
-            pixels = image.reshape(-1, 3)
-        if len(pixels) > 25000:
-            rng = np.random.default_rng(2026)
-            pixels = pixels[rng.choice(len(pixels), 25000, replace=False)]
-        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 40, 0.5)
-        _, labels, centers = cv2.kmeans(
-            pixels.astype(np.float32), 10, None, criteria, 5, cv2.KMEANS_PP_CENTERS
+    @staticmethod
+    def _superpixels(rgb: np.ndarray) -> tuple[np.ndarray, int]:
+        region = max(10, int(max(rgb.shape[:2]) / 48))
+        slic = cv2.ximgproc.createSuperpixelSLIC(
+            rgb, algorithm=cv2.ximgproc.SLICO, region_size=region, ruler=9.0
         )
-        counts = np.bincount(labels.ravel(), minlength=len(centers))
-        centers = centers[np.argsort(counts)[::-1]]
-        return np.clip(centers, 0, 255).astype(np.uint8)
+        slic.iterate(10)
+        slic.enforceLabelConnectivity(min_element_size=18)
+        return slic.getLabels(), slic.getNumberOfSuperpixels()
 
-    def colorize(self, source: Path, destination: Path) -> None:
-        gray_rgb = np.asarray(Image.open(source).convert("RGB"), dtype=np.uint8)
-        gray = cv2.cvtColor(gray_rgb, cv2.COLOR_RGB2GRAY)
-        height, width = gray.shape
+    @classmethod
+    def _describe(cls, rgb: np.ndarray, include_color: bool) -> dict[str, np.ndarray]:
+        small = cls._resize(rgb)
+        lab = cv2.cvtColor(small.astype(np.float32) / 255.0, cv2.COLOR_RGB2LAB)
+        gray = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY)
+        edges = cv2.Canny(gray, 45, 135).astype(np.float32) / 255.0
+        labels, count = cls._superpixels(small)
+        flat = labels.ravel()
+        counts = np.maximum(np.bincount(flat, minlength=count).astype(np.float32), 1)
 
-        palette_lab = cv2.cvtColor(self.palette[None, :, :], cv2.COLOR_RGB2LAB)[0].astype(np.float32)
-        palette_lab = palette_lab[np.argsort(palette_lab[:, 0])]
-        smooth = cv2.bilateralFilter(gray, 9, 28, 28)
+        def mean(values: np.ndarray) -> np.ndarray:
+            return np.bincount(flat, weights=values.ravel(), minlength=count) / counts
 
-        # Tone bands plus low-frequency spatial variation keep adjacent regions distinct.
-        tone = smooth.astype(np.float32) / 255.0
-        yy, xx = np.mgrid[0:height, 0:width]
-        spatial = (np.sin(xx / 91.0) + np.cos(yy / 113.0)) * 0.08
-        index = np.clip(((tone + spatial) * len(palette_lab)).astype(np.int32), 0, len(palette_lab) - 1)
-        chroma = palette_lab[index, 1:3]
-        chroma = chroma.astype(np.float32)
-        chroma = np.stack(
-            [cv2.bilateralFilter(chroma[..., channel], 11, 35, 35) for channel in range(2)],
+        l_value = lab[..., 0]
+        l_mean = mean(l_value)
+        l_std = np.sqrt(np.maximum(mean(l_value * l_value) - l_mean * l_mean, 0))
+        yy, xx = np.mgrid[0 : small.shape[0], 0 : small.shape[1]]
+        features = np.column_stack(
+            (
+                l_mean / 100.0,
+                l_std / 35.0,
+                mean(edges),
+                mean(xx.astype(np.float32)) / max(1, small.shape[1] - 1),
+                mean(yy.astype(np.float32)) / max(1, small.shape[0] - 1),
+                np.log1p(counts) / 9.0,
+            )
+        ).astype(np.float32)
+
+        hist = cv2.calcHist([gray], [0], None, [16], [0, 256]).ravel().astype(np.float32)
+        hist /= max(hist.sum(), 1)
+        page = np.r_[hist, edges.mean(), gray.mean() / 255.0].astype(np.float32)
+        thumb = cv2.resize(gray, (192, 192), interpolation=cv2.INTER_AREA).astype(np.float32)
+        thumb = (thumb - thumb.mean()) / max(thumb.std(), 1.0)
+        result = {
+            "labels": labels,
+            "features": features,
+            "page": page,
+            "thumb": thumb,
+            "rgb": small,
+        }
+        if include_color:
+            result["colors"] = np.column_stack((mean(lab[..., 1]), mean(lab[..., 2]))).astype(np.float32)
+        return result
+
+    def transfer(self, target_rgb: np.ndarray) -> np.ndarray:
+        target = self._describe(target_rgb, include_color=False)
+        structure_scores = np.array(
+            [float(np.mean(reference["thumb"] * target["thumb"])) for reference in self.references]
+        )
+        distances = np.array(
+            [np.mean((reference["page"] - target["page"]) ** 2) for reference in self.references]
+        )
+        selected = np.argsort(distances)[: min(4, len(self.references))]
+        ref_features = np.concatenate([self.references[index]["features"] for index in selected])
+        ref_colors = np.concatenate([self.references[index]["colors"] for index in selected])
+        # For different-layout pages, neutral paper regions are poor donors for clothes/skin.
+        colorful = np.linalg.norm(ref_colors, axis=1) > 4.0
+        if np.count_nonzero(colorful) >= 32:
+            ref_features = ref_features[colorful]
+            ref_colors = ref_colors[colorful]
+
+        weighted_ref = ref_features * self.FEATURE_WEIGHTS
+        weighted_target = target["features"] * self.FEATURE_WEIGHTS
+        segment_colors = np.empty((len(weighted_target), 2), dtype=np.float32)
+        for start in range(0, len(weighted_target), 192):
+            block = weighted_target[start : start + 192]
+            squared = np.sum((block[:, None, :] - weighted_ref[None, :, :]) ** 2, axis=2)
+            k = min(5, squared.shape[1])
+            nearest = np.argpartition(squared, k - 1, axis=1)[:, :k]
+            near_dist = np.take_along_axis(squared, nearest, axis=1)
+            weights = 1.0 / (near_dist + 0.018)
+            colors = ref_colors[nearest]
+            segment_colors[start : start + len(block)] = np.sum(
+                colors * weights[..., None], axis=1
+            ) / np.sum(weights, axis=1, keepdims=True)
+
+        low_ab = segment_colors[target["labels"]]
+        mapped = cv2.resize(
+            low_ab,
+            (target_rgb.shape[1], target_rgb.shape[0]),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        best_structure = int(np.argmax(structure_scores))
+        best_reference = self.references[best_structure]
+        same_aspect = abs(
+            target_rgb.shape[1] / target_rgb.shape[0]
+            - best_reference["rgb"].shape[1] / best_reference["rgb"].shape[0]
+        ) < 0.035
+        if same_aspect and structure_scores[best_structure] > 0.52:
+            reference_lab = cv2.cvtColor(
+                best_reference["rgb"].astype(np.float32) / 255.0, cv2.COLOR_RGB2LAB
+            )
+            direct = cv2.resize(
+                reference_lab[..., 1:],
+                (target_rgb.shape[1], target_rgb.shape[0]),
+                interpolation=cv2.INTER_CUBIC,
+            )
+            direct_weight = np.clip((structure_scores[best_structure] - 0.52) / 0.28, 0.55, 1.0)
+            mapped = mapped * (1.0 - direct_weight) + direct * direct_weight
+
+        guide = cv2.cvtColor(target_rgb, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+        mapped = np.stack(
+            [
+                cv2.ximgproc.guidedFilter(
+                    guide=guide,
+                    src=mapped[..., channel].astype(np.float32),
+                    radius=13,
+                    eps=0.0025,
+                )
+                for channel in range(2)
+            ],
             axis=-1,
         )
+        return mapped
 
-        lab = np.empty((height, width, 3), dtype=np.float32)
-        lab[..., 0] = gray
-        neutral = 128.0
-        lab[..., 1:] = neutral + (chroma - neutral) * self.settings.saturation
-        rgb = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
-
-        # Ink and screentones remain crisp by restoring original luminance and dark lines.
-        line_mask = np.clip((92.0 - gray.astype(np.float32)) / 92.0, 0, 1)[..., None]
-        original = gray_rgb.astype(np.float32)
-        mixed = rgb.astype(np.float32) * self.settings.strength + original * (1 - self.settings.strength)
-        mixed = mixed * (1 - line_mask * self.settings.line_protection) + original * line_mask * self.settings.line_protection
-        Image.fromarray(np.clip(mixed, 0, 255).astype(np.uint8)).save(destination, quality=92, subsampling=0)
+    def best_reference_index(self, target_rgb: np.ndarray) -> int:
+        target = self._describe(target_rgb, include_color=False)
+        structure = np.array(
+            [float(np.mean(reference["thumb"] * target["thumb"])) for reference in self.references]
+        )
+        page_distance = np.array(
+            [np.mean((reference["page"] - target["page"]) ** 2) for reference in self.references]
+        )
+        page_score = 1.0 - page_distance / max(float(page_distance.max()), 1e-6)
+        return int(np.argmax(structure * 0.72 + page_score * 0.28))
 
 
 _session = None
@@ -105,7 +191,7 @@ def _ai_session():
 
             model_path = resource_path("assets/models/eccv16-colorizer.onnx")
             if not model_path.exists():
-                raise FileNotFoundError("AI 模型缺失，请使用完整便携版或下载模型资产")
+                raise FileNotFoundError("AI 模型缺失，请使用完整便携版")
             options = ort.SessionOptions()
             options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
             options.intra_op_num_threads = max(1, min(8, (os.cpu_count() or 4) - 1))
@@ -115,64 +201,67 @@ def _ai_session():
     return _session
 
 
-class NeuralReferenceColorizer:
-    """ECCV16 neural colorizer with reference-image chroma alignment."""
-
-    def __init__(self, reference: Path | None, settings: ColorSettings):
+class MultiReferenceColorizer:
+    def __init__(self, references: list[Path], settings: ColorSettings):
         self.settings = settings
-        self.reference_stats = self._reference_stats(reference) if reference else None
-        self.session = _ai_session()
+        self.matcher = RegionReferenceMatcher(references) if references else None
+        self.session = _ai_session() if settings.engine == "ai" else None
 
-    @staticmethod
-    def _reference_stats(reference: Path) -> tuple[np.ndarray, np.ndarray]:
-        rgb = np.asarray(Image.open(reference).convert("RGB"), dtype=np.float32) / 255.0
-        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
-        chroma = lab[..., 1:]
-        mask = np.linalg.norm(chroma, axis=2) > 7
-        values = chroma[mask] if mask.sum() > 64 else chroma.reshape(-1, 2)
-        return values.mean(axis=0), np.maximum(values.std(axis=0), 4.0)
-
-    def colorize(self, source: Path, destination: Path) -> None:
-        rgb8 = np.asarray(Image.open(source).convert("RGB"), dtype=np.uint8)
-        rgb = rgb8.astype(np.float32) / 255.0
-        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
-        l_full = lab[..., 0]
+    def _automatic_ab(self, l_full: np.ndarray) -> np.ndarray:
         l_small = cv2.resize(l_full, (256, 256), interpolation=cv2.INTER_AREA)
         tensor = l_small[None, None].astype(np.float32)
         output = self.session.run(["ab_channels"], {"l_channel": tensor})[0][0]
-        ab = output.transpose(1, 2, 0)
-        ab = cv2.resize(
-            ab, (rgb8.shape[1], rgb8.shape[0]), interpolation=cv2.INTER_CUBIC
+        return cv2.resize(
+            output.transpose(1, 2, 0),
+            (l_full.shape[1], l_full.shape[0]),
+            interpolation=cv2.INTER_CUBIC,
         )
 
-        content_mask = (l_full > 8) & (l_full < 96)
-        values = ab[content_mask] if content_mask.sum() > 64 else ab.reshape(-1, 2)
-        pred_mean = values.mean(axis=0)
-        pred_std = np.maximum(values.std(axis=0), 2.0)
-        if self.reference_stats is not None:
-            ref_mean, ref_std = self.reference_stats
-            scale = np.clip(ref_std / pred_std, 0.65, 1.75)
-            aligned = (ab - pred_mean) * scale + pred_mean
-            aligned += (ref_mean - pred_mean) * 0.42
-            ab = ab * 0.32 + aligned * 0.68
+    @staticmethod
+    def _default_ab(l_full: np.ndarray) -> np.ndarray:
+        palette = np.array(
+            [[18, 17], [32, 8], [8, -24], [-13, -18], [25, -20], [15, 30]],
+            dtype=np.float32,
+        )
+        index = np.clip((l_full / 100 * len(palette)).astype(np.int32), 0, len(palette) - 1)
+        return palette[index]
+
+    def colorize(self, source: Path, destination: Path) -> None:
+        rgb8 = _rgb(source)
+        rgb = rgb8.astype(np.float32) / 255.0
+        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+        l_full = lab[..., 0]
+
+        if self.session is not None:
+            ab = self._automatic_ab(l_full)
+        else:
+            ab = self._default_ab(l_full)
+
+        if self.matcher is not None:
+            reference_ab = self.matcher.transfer(rgb8)
+            weight = np.clip(self.settings.reference_strength, 0.0, 1.0)
+            ab = ab * (1.0 - weight) + reference_ab * weight
+
         ab *= self.settings.saturation
-        # Keep paper and speech balloons neutral while retaining light skin tones.
-        paper_chroma = np.clip((100.0 - l_full) / 5.0, 0.0, 1.0)[..., None]
-        ab *= paper_chroma
+        # Only absolute paper-white pixels are neutralized. Light clothes and skin stay colored.
+        paper = np.clip((l_full - 99.0) / 0.8, 0.0, 1.0)[..., None]
+        ab *= 1.0 - paper * 0.96
 
         result_lab = np.dstack((l_full, np.clip(ab, -110, 110))).astype(np.float32)
-        colored = cv2.cvtColor(result_lab, cv2.COLOR_LAB2RGB)
-        colored = np.clip(colored * 255.0, 0, 255)
+        colored = np.clip(cv2.cvtColor(result_lab, cv2.COLOR_LAB2RGB) * 255.0, 0, 255)
         original = rgb8.astype(np.float32)
-        line_mask = np.clip((35.0 - l_full) / 35.0, 0, 1)[..., None]
+        # Protect only genuine dark ink, not gray screentones or clothing fills.
+        line_mask = np.clip((20.0 - l_full) / 18.0, 0, 1)[..., None]
         mixed = colored * self.settings.strength + original * (1 - self.settings.strength)
         mixed = mixed * (1 - line_mask * self.settings.line_protection) + original * line_mask * self.settings.line_protection
         Image.fromarray(np.clip(mixed, 0, 255).astype(np.uint8)).save(
-            destination, quality=92, subsampling=0
+            destination, quality=94, subsampling=0
         )
 
 
-def make_colorizer(reference: Path | None, settings: ColorSettings):
-    if settings.engine == "fast":
-        return ReferencePaletteColorizer(reference, settings)
-    return NeuralReferenceColorizer(reference, settings)
+def make_colorizer(references: list[Path], settings: ColorSettings):
+    if settings.engine == "manganinja":
+        from .manganinja_engine import MangaNinjaColorizer
+
+        return MangaNinjaColorizer(references, settings)
+    return MultiReferenceColorizer(references, settings)

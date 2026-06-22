@@ -18,7 +18,7 @@
 
     <section class="hero">
       <div><span class="eyebrow">REFERENCE-AWARE COLOR</span><h2>让黑白漫画，<em>长出颜色。</em></h2>
-      <p>导入图片、PDF、CBZ 或 ZIP；用一张彩色样例统一整部漫画的色调。所有文件只在你的电脑上处理。</p></div>
+      <p>导入图片、PDF、CBZ 或 ZIP；用多张人物、服装和场景样例约束整部漫画的颜色。所有文件只在你的电脑上处理。</p></div>
       <div class="privacy"><strong>100%</strong><span>LOCAL<br>PROCESSING</span></div>
     </section>
 
@@ -35,23 +35,25 @@
       <section class="card reference-card">
         <div class="step">02</div><h3>样例与风格</h3>
         <div class="engine-switch">
-          <label><input type="radio" name="engine" value="ai" checked><span><strong>AI 精细</strong><small>神经网络 · 推荐</small></span></label>
+          <label><input type="radio" name="engine" value="manganinja" checked><span><strong>人物精细</strong><small>MangaNinja · 皮肤/服装</small></span></label>
+          <label><input type="radio" name="engine" value="ai"><span><strong>AI 平衡</strong><small>CPU · 快速整页</small></span></label>
           <label><input type="radio" name="engine" value="fast"><span><strong>极速模式</strong><small>超快 CPU 配色</small></span></label>
         </div>
         <label class="reference">
-          <input id="reference" name="reference" type="file" accept="image/*">
-          <span id="ref-state"><strong>＋ 添加彩色样例</strong><small>可选，但强烈推荐</small></span>
+          <input id="references" name="references" type="file" accept="image/*" multiple>
+          <span id="ref-state"><strong>＋ 添加多张彩色样例</strong><small>人物、服装、场景越完整越准确</small></span>
         </label>
-        <label>饱和度 <output id="sat-out">82%</output><input name="saturation" type="range" min="0.3" max="1.2" step="0.01" value="0.82"></label>
-        <label>上色强度 <output id="str-out">88%</output><input name="strength" type="range" min="0.35" max="1" step="0.01" value="0.88"></label>
-        <label>线稿保护 <output id="line-out">92%</output><input name="line_protection" type="range" min="0.4" max="1" step="0.01" value="0.92"></label>
+        <label>样例约束 <output id="ref-out">90%</output><input name="reference_strength" type="range" min="0.5" max="1" step="0.01" value="0.90"></label>
+        <label>饱和度 <output id="sat-out">105%</output><input name="saturation" type="range" min="0.5" max="1.4" step="0.01" value="1.05"></label>
+        <label>上色强度 <output id="str-out">95%</output><input name="strength" type="range" min="0.5" max="1" step="0.01" value="0.95"></label>
+        <label>线稿保护 <output id="line-out">82%</output><input name="line_protection" type="range" min="0.4" max="1" step="0.01" value="0.82"></label>
       </section>
 
       <section class="card action-card">
         <div class="step">03</div><h3>开始上色</h3>
         <label class="title-label">作品名称<input name="title" placeholder="默认使用文件名"></label>
         <button type="submit" id="start">开始批量上色 <span>→</span></button>
-        <p class="hint">本地 AI 推理 · 保留原始线稿 · 自动导出 PDF + CBZ</p>
+        <p class="hint">人物精细模式需 NVIDIA 6GB+ · 仅限非商业使用</p>
       </section>
     </form>
 

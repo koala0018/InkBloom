@@ -10,3 +10,9 @@ The software is provided by the copyright holders and contributors “as is”, 
 
 Source: https://github.com/richzhang/colorization
 
+## MangaNinja optional engine
+
+The optional high-quality character engine uses MangaNinja by Zhiheng Liu et al., licensed under Creative Commons Attribution-NonCommercial 4.0 International. It is available for non-commercial use only and is downloaded separately when the user installs the character engine.
+
+Source: https://github.com/ali-vilab/MangaNinjia
+License: https://creativecommons.org/licenses/by-nc/4.0/

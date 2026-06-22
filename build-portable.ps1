@@ -5,12 +5,14 @@ $env:PYTHONPATH = "$root\.deps"
 .\.venv-build\Scripts\python.exe -m PyInstaller --paths .deps --noconfirm --clean --onedir --windowed --name InkBloom `
   --add-data "templates;templates" --add-data "static;static" `
   --add-data "assets\models;assets\models" `
+  --add-data "install-manganinja.ps1;." --add-data "manganinja-requirements.txt;." `
   --collect-all fitz --collect-all cv2 app.py
 New-Item -ItemType Directory -Force release | Out-Null
 Remove-Item -Recurse -Force release\InkBloom -ErrorAction SilentlyContinue
 Copy-Item -Recurse dist\InkBloom release\InkBloom
 New-Item -ItemType Directory -Force release\InkBloom\work,release\InkBloom\output,release\InkBloom\models | Out-Null
 Copy-Item THIRD_PARTY_NOTICES.md release\InkBloom\THIRD_PARTY_NOTICES.md
+Copy-Item install-manganinja.ps1,manganinja-requirements.txt release\InkBloom\
 Set-Content -Encoding UTF8 release\InkBloom\README.txt @"
 InkBloom Portable
 1. Double-click InkBloom.exe.

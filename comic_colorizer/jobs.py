@@ -29,17 +29,17 @@ class JobManager:
         self.jobs: dict[str, Job] = {}
         self.lock = threading.Lock()
 
-    def create(self, uploads: list[Path], reference: Path | None, title: str, settings: ColorSettings) -> Job:
+    def create(self, uploads: list[Path], references: list[Path], title: str, settings: ColorSettings) -> Job:
         job_id = uuid.uuid4().hex[:10]
         job = Job(id=job_id, title=title)
         self.jobs[job_id] = job
         thread = threading.Thread(
-            target=self._run, args=(job, uploads, reference, settings), daemon=True
+            target=self._run, args=(job, uploads, references, settings), daemon=True
         )
         thread.start()
         return job
 
-    def _run(self, job: Job, uploads: list[Path], reference: Path | None, settings: ColorSettings):
+    def _run(self, job: Job, uploads: list[Path], references: list[Path], settings: ColorSettings):
         job_dir = WORK / job.id
         page_dir = job_dir / "pages"
         colored_dir = job_dir / "colored"
@@ -49,16 +49,26 @@ class JobManager:
             job.message = "正在展开漫画文档"
             pages, source_kind = collect_inputs(uploads, page_dir)
             job.total = len(pages)
-            engine = make_colorizer(reference, settings)
+            engine = make_colorizer(references, settings)
             results: list[Path] = []
             job.status = "colorizing"
-            for index, page in enumerate(pages, 1):
-                job.message = f"正在上色 {index}/{len(pages)}"
-                target = colored_dir / f"colored_{index:05d}.jpg"
-                engine.colorize(page, target)
-                results.append(target)
-                job.previews.append(f"/preview/{job.id}/{target.name}")
-                job.progress = index
+            if hasattr(engine, "colorize_batch"):
+                def on_page(index: int, total: int) -> None:
+                    target = colored_dir / f"colored_{index:05d}.jpg"
+                    job.message = f"人物精细上色 {index}/{total}"
+                    job.previews.append(f"/preview/{job.id}/{target.name}")
+                    job.progress = index
+
+                job.message = "正在加载人物精细模型（首次约需 1-2 分钟）"
+                results = engine.colorize_batch(pages, colored_dir, on_page)
+            else:
+                for index, page in enumerate(pages, 1):
+                    job.message = f"正在上色 {index}/{len(pages)}"
+                    target = colored_dir / f"colored_{index:05d}.jpg"
+                    engine.colorize(page, target)
+                    results.append(target)
+                    job.previews.append(f"/preview/{job.id}/{target.name}")
+                    job.progress = index
             job.status = "exporting"
             job.message = "正在生成 PDF 和 CBZ"
             out_dir = OUTPUT / job.id
@@ -72,7 +82,7 @@ class JobManager:
         finally:
             for upload in uploads:
                 upload.unlink(missing_ok=True)
-            if reference:
+            for reference in references:
                 reference.unlink(missing_ok=True)
 
     def clean_old(self) -> None:

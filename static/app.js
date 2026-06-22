@@ -1,16 +1,17 @@
 const form = document.querySelector('#job-form');
 const files = document.querySelector('#files');
-const reference = document.querySelector('#reference');
+const references = document.querySelector('#references');
 const panel = document.querySelector('#progress-panel');
 const button = document.querySelector('#start');
 
 files.addEventListener('change', () => {
   document.querySelector('#file-state').textContent = files.files.length ? `已选 ${files.files.length} 个文件` : '选择文件';
 });
-reference.addEventListener('change', () => {
-  document.querySelector('#ref-state').innerHTML = reference.files.length ? `<strong>✓ ${reference.files[0].name}</strong><small>将用于整部漫画的配色</small>` : '<strong>＋ 添加彩色样例</strong><small>可选，但强烈推荐</small>';
+references.addEventListener('change', () => {
+  const count = references.files.length;
+  document.querySelector('#ref-state').innerHTML = count ? `<strong>✓ 已选择 ${count} 张样例</strong><small>将按页面和区域自动匹配</small>` : '<strong>＋ 添加多张彩色样例</strong><small>人物、服装、场景越完整越准确</small>';
 });
-for (const [name, id] of [['saturation','sat-out'],['strength','str-out'],['line_protection','line-out']]) {
+for (const [name, id] of [['reference_strength','ref-out'],['saturation','sat-out'],['strength','str-out'],['line_protection','line-out']]) {
   const input = form.elements[name];
   input.addEventListener('input', () => document.querySelector(`#${id}`).textContent = `${Math.round(input.value * 100)}%`);
 }
@@ -58,4 +59,3 @@ function showError(message) {
   document.querySelector('#progress-number').textContent = '失败';
   button.disabled = false; button.textContent = '重试';
 }
-
