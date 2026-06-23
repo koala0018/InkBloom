@@ -7,18 +7,18 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/engine.css">
-  <title>InkBloom 漫画上色</title>
+  <title>InkBloom · Style2Paints 漫画上色</title>
 </head>
 <body>
   <main class="shell">
     <header>
-      <div class="brand"><span class="mark">I</span><div><h1>InkBloom</h1><p>本地 · 免费 · 漫画批量上色</p></div></div>
+      <div class="brand"><span class="mark">I</span><div><h1>InkBloom</h1><p>STYLE2PAINTS · 本地批量漫画上色</p></div></div>
       <span class="badge">PORTABLE</span>
     </header>
 
     <section class="hero">
-      <div><span class="eyebrow">REFERENCE-AWARE COLOR</span><h2>让黑白漫画，<em>长出颜色。</em></h2>
-      <p>导入图片、PDF、CBZ 或 ZIP；用多张人物、服装和场景样例约束整部漫画的颜色。所有文件只在你的电脑上处理。</p></div>
+      <div><span class="eyebrow">STYLE2PAINTS V4.5 WORKFLOW</span><h2>从线稿分区，<em>一步步长出颜色。</em></h2>
+      <p>导入图片、PDF、CBZ 或 ZIP；使用多张人物、服装和场景样例，为每页自动选择最接近的参考图。任务会展示线稿清理、固有色、精细渲染和分层导出的独立进度与日志。</p></div>
       <div class="privacy"><strong>100%</strong><span>LOCAL<br>PROCESSING</span></div>
     </section>
 
@@ -33,36 +33,69 @@
       </section>
 
       <section class="card reference-card">
-        <div class="step">02</div><h3>样例与风格</h3>
+        <div class="step">02</div><h3>样例与 Style2Paints 参数</h3>
         <div class="engine-switch">
-          <label><input type="radio" name="engine" value="manganinja" checked><span><strong>人物精细</strong><small>MangaNinja · 皮肤/服装</small></span></label>
-          <label><input type="radio" name="engine" value="ai"><span><strong>AI 平衡</strong><small>CPU · 快速整页</small></span></label>
-          <label><input type="radio" name="engine" value="fast"><span><strong>极速模式</strong><small>超快 CPU 配色</small></span></label>
+          <label><input type="radio" name="engine" value="style2paints" checked><span><strong>Style2Paints V4.5</strong><small>{{ '官方程序已就绪' if style2paints_ready else '需要安装官方程序' }}</small></span></label>
+          <label><input type="radio" name="engine" value="ai"><span><strong>CPU 兼容模式</strong><small>仅在无法运行官方引擎时使用</small></span></label>
         </div>
+
         <label class="reference">
-          <input id="references" name="references" type="file" accept="image/*" multiple>
-          <span id="ref-state"><strong>＋ 添加多张彩色样例</strong><small>人物、服装、场景越完整越准确</small></span>
+          <input id="references" name="references" type="file" accept="image/*" multiple required>
+          <span id="ref-state"><strong>＋ 添加多张彩色样例</strong><small>人物、服装、场景越完整越容易匹配</small></span>
         </label>
-        <label>样例约束 <output id="ref-out">90%</output><input name="reference_strength" type="range" min="0.5" max="1" step="0.01" value="0.90"></label>
-        <label>饱和度 <output id="sat-out">105%</output><input name="saturation" type="range" min="0.5" max="1.4" step="0.01" value="1.05"></label>
-        <label>上色强度 <output id="str-out">95%</output><input name="strength" type="range" min="0.5" max="1" step="0.01" value="0.95"></label>
-        <label>线稿保护 <output id="line-out">82%</output><input name="line_protection" type="range" min="0.4" max="1" step="0.01" value="0.82"></label>
+
+        <fieldset class="native-options">
+          <legend>原生生成阶段 <button class="help" type="button" data-help="care-stage">?</button></legend>
+          <label class="choice"><input type="radio" name="s2p_stage" value="careful" checked><span><b>Stage II · Careful</b><small>经过第二次精细渲染，边界与细节最好，推荐成品使用。</small></span></label>
+          <label class="choice"><input type="radio" name="s2p_stage" value="careless"><span><b>Stage I · Careless</b><small>第一次固有色结果，更快、更平，适合继续手工绘制。</small></span></label>
+        </fieldset>
+
+        <label class="select-label">原生输出类型 <button class="help" type="button" data-help="finish">?</button>
+          <select name="s2p_finish">
+            <option value="blended_smoothed" selected>融合线稿 · 平滑色彩（推荐）</option>
+            <option value="blended_flat">融合线稿 · 平涂色块</option>
+            <option value="smoothed">无原线稿 · 平滑色彩</option>
+            <option value="flat">无原线稿 · 纯平涂层</option>
+          </select>
+        </label>
+
+        <label class="toggle"><input type="checkbox" name="s2p_save_layers" checked><span><b>保存全部 8 个原生输出层</b><small>完成后额外提供 Style2Paints 分层 ZIP。</small></span></label>
+
+        <details class="advanced">
+          <summary>高级：颜色提示点（Style2Paints 原生）</summary>
+          <p>格式为 <code>[x, y, R, G, B, 半径]</code>，x/y 使用 0–1 坐标。例如在画面中心放肤色：<code>[[0.5,0.5,244,198,170,0.02]]</code>。留空时完全依赖样例图。</p>
+          <textarea name="s2p_hint_points" rows="3" spellcheck="false">[]</textarea>
+        </details>
+
+        <details class="advanced cpu-options">
+          <summary>CPU 兼容模式参数</summary>
+          <label>样例约束 <output id="ref-out">90%</output><input name="reference_strength" type="range" min="0.5" max="1" step="0.01" value="0.90"></label>
+          <label>饱和度 <output id="sat-out">105%</output><input name="saturation" type="range" min="0.5" max="1.4" step="0.01" value="1.05"></label>
+          <label>上色强度 <output id="str-out">95%</output><input name="strength" type="range" min="0.5" max="1" step="0.01" value="0.95"></label>
+          <label>线稿保护 <output id="line-out">82%</output><input name="line_protection" type="range" min="0.4" max="1" step="0.01" value="0.82"></label>
+        </details>
       </section>
 
       <section class="card action-card">
         <div class="step">03</div><h3>开始上色</h3>
         <label class="title-label">作品名称<input name="title" placeholder="默认使用文件名"></label>
+        <div class="engine-note"><strong>Style2Paints 工作流</strong><span>线稿清理 → 样例匹配 → Stage I 固有色 → Stage II 精修 → 8 层导出</span></div>
         <button type="submit" id="start">开始批量上色 <span>→</span></button>
-        <p class="hint">人物精细模式需 NVIDIA 6GB+ · 仅限非商业使用</p>
+        <p class="hint">Style2Paints 代码为 Apache-2.0；官方预训练模型与二进制保留全部权利。生成图片归你所有。</p>
       </section>
     </form>
 
     <section id="progress-panel" class="progress-panel hidden">
-      <div class="progress-head"><div><span class="eyebrow">PROCESSING</span><h3 id="progress-message">准备中</h3></div><strong id="progress-number">0%</strong></div>
+      <div class="progress-head"><div><span class="eyebrow">PROCESSING PIPELINE</span><h3 id="progress-message">准备中</h3></div><strong id="progress-number">0%</strong></div>
       <div class="bar"><i id="progress-bar"></i></div>
+      <div id="stage-list" class="stage-list"></div>
+      <div class="log-head"><span>实时任务日志</span><button type="button" id="log-toggle">收起</button></div>
+      <div id="job-log" class="job-log" aria-live="polite"></div>
       <div id="previews" class="previews"></div>
       <div id="downloads" class="downloads"></div>
     </section>
+
+    <dialog id="help-dialog"><button class="dialog-close" type="button">×</button><h3 id="help-title"></h3><p id="help-body"></p></dialog>
 
     <footer><span>手机同一 Wi-Fi 可访问：<b>{{ lan_url }}</b></span><span>文件保存在程序目录的 output 文件夹</span></footer>
   </main>

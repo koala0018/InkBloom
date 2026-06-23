@@ -12,3 +12,4 @@ assets/models/*.onnx
 __pycache__/
 *.spec
 *.pyc
+*.log

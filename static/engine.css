@@ -1,6 +1,37 @@
-.engine-switch{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}
+.workspace{grid-template-columns:.8fr 1.45fr .8fr}
+.card{min-height:610px}
+.engine-switch{display:grid;grid-template-columns:1.25fr 1fr;gap:8px;margin-bottom:12px}
 .engine-switch label{margin:0!important}
 .engine-switch input{display:none}
-.engine-switch span{display:flex;flex-direction:column;gap:3px;border:1px solid var(--line);padding:9px;border-radius:8px;cursor:pointer}
+.engine-switch span{display:flex;flex-direction:column;gap:3px;border:1px solid var(--line);padding:10px;border-radius:8px;cursor:pointer}
 .engine-switch input:checked+span{border-color:var(--accent);background:#e5734712}
 .engine-switch small{color:var(--muted);font-size:9px}
+.native-options{border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0}
+.native-options legend{font-size:11px;color:#c4c4ca;padding:0 5px}
+.choice{display:block!important;margin:7px 0!important}
+.choice input{display:none}
+.choice span{display:flex;flex-direction:column;gap:3px;padding:9px;border:1px solid #303540;border-radius:8px;cursor:pointer}
+.choice input:checked+span{border-color:var(--accent);background:#e5734710}
+.choice small,.toggle small{color:var(--muted);font-size:10px;line-height:1.45}
+.select-label{position:relative}
+select,textarea{width:100%;margin-top:8px;background:#14171e;border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:10px;font:inherit}
+.toggle{display:flex!important;align-items:flex-start;gap:8px;margin:12px 0!important}
+.toggle input{margin-top:3px;accent-color:var(--accent)}
+.toggle span{display:flex;flex-direction:column;gap:3px}
+.advanced{border-top:1px solid var(--line);padding-top:10px;margin-top:10px;color:#c4c4ca;font-size:11px}
+.advanced summary{cursor:pointer;color:var(--accent)}
+.advanced p{color:var(--muted);line-height:1.6}
+.advanced code{color:#e6b49f}
+.help{display:inline-grid!important;place-items:center!important;width:18px!important;height:18px!important;padding:0!important;margin:0 0 0 4px!important;border:1px solid #5b6070!important;border-radius:50%!important;background:transparent!important;color:#b8bbc4!important;font-size:10px!important;float:none!important}
+.engine-note{display:flex;flex-direction:column;gap:8px;margin-top:32px;border-left:2px solid var(--accent);padding:12px;background:#11141a}
+.engine-note span{font-size:11px;color:var(--muted);line-height:1.7}
+.stage-list{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:18px 0}
+.stage{background:#14171e;border:1px solid var(--line);border-radius:9px;padding:10px}
+.stage>div{display:grid;grid-template-columns:1fr auto;gap:4px}
+.stage strong{font-size:11px}.stage span{grid-column:1/-1;color:var(--muted);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.stage b{font-size:10px;color:var(--accent)}
+.stage>i{display:block;height:3px;background:#2a2e37;margin-top:8px}.stage>i em{display:block;height:100%;background:#6f7480;transition:.3s}.stage.running{border-color:#72503f}.stage.running>i em,.stage.done>i em{background:var(--accent)}
+.log-head{display:flex;justify-content:space-between;align-items:center;margin:16px 0 6px;font-size:11px;color:#b9bbc2}.log-head button{width:auto;margin:0;padding:4px 9px;background:transparent;border:1px solid var(--line);color:var(--muted);font-size:10px}
+.job-log{height:190px;overflow:auto;background:#0d0f14;border:1px solid #292d36;border-radius:8px;padding:9px;font:11px/1.65 Consolas,"Microsoft YaHei",monospace}
+.job-log div{display:grid;grid-template-columns:58px 1fr;gap:8px;color:#aeb2bc}.job-log time{color:#606673}.job-log .error span{color:#ff8d83}.job-log .success span{color:#8fd3a5}
+dialog{width:min(520px,90vw);background:#191c24;color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:25px}dialog::backdrop{background:#050608b8}.dialog-close{position:absolute;right:12px;top:9px;width:auto;margin:0;padding:4px 8px;background:transparent;color:#aaa;font-size:20px}dialog p{color:var(--muted);line-height:1.75}
+@media(max-width:1000px){.workspace{grid-template-columns:1fr}.card{min-height:auto}.stage-list{grid-template-columns:repeat(2,1fr)}}

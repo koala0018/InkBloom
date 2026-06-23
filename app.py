@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import socket
 import sys
@@ -10,12 +9,12 @@ import traceback
 import webbrowser
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, render_template, request, send_from_directory
+from flask import Flask, jsonify, render_template, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 from comic_colorizer.colorizer import ColorSettings
 from comic_colorizer.jobs import JobManager
-from comic_colorizer.paths import OUTPUT, ROOT, WORK, ensure_dirs, portable_env, resource_path
+from comic_colorizer.paths import MODELS, OUTPUT, ROOT, WORK, ensure_dirs, portable_env, resource_path
 
 ensure_dirs()
 portable_env()
@@ -29,6 +28,28 @@ app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024
 manager = JobManager()
 
 
+def wants_json() -> bool:
+    return request.path.startswith("/api/")
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    if wants_json():
+        return jsonify({"error": "任务不存在或程序刚刚重启，请重新提交一次。"}), 404
+    return render_template(
+        "index.html",
+        lan_url=f"http://{local_ip()}:17860",
+        style2paints_ready=(MODELS / "style2paints" / "READY").exists(),
+    ), 404
+
+
+@app.errorhandler(500)
+def server_error(error):
+    if wants_json():
+        return jsonify({"error": f"后端处理异常：{error}"}), 500
+    return jsonify({"error": str(error)}), 500
+
+
 def local_ip() -> str:
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
@@ -40,7 +61,19 @@ def local_ip() -> str:
 
 @app.get("/")
 def index():
-    return render_template("index.html", lan_url=f"http://{local_ip()}:17860")
+    return render_template(
+        "index.html",
+        lan_url=f"http://{local_ip()}:17860",
+        style2paints_ready=(MODELS / "style2paints" / "READY").exists(),
+    )
+
+
+@app.get("/api/engines")
+def engine_status():
+    return jsonify({
+        "style2paints": (MODELS / "style2paints" / "READY").exists(),
+        "onnx": resource_path("assets/models/eccv16-colorizer.onnx").exists(),
+    })
 
 
 @app.post("/api/jobs")
@@ -71,11 +104,15 @@ def create_job():
 
     first_name = Path(files[0].filename or "comic").stem
     settings = ColorSettings(
-        engine=request.form.get("engine", "manganinja"),
+        engine=request.form.get("engine", "style2paints"),
         saturation=float(request.form.get("saturation", 1.05)),
         strength=float(request.form.get("strength", 0.95)),
         line_protection=float(request.form.get("line_protection", 0.82)),
         reference_strength=float(request.form.get("reference_strength", 0.90)),
+        s2p_stage=request.form.get("s2p_stage", "careful"),
+        s2p_finish=request.form.get("s2p_finish", "blended_smoothed"),
+        s2p_save_layers=request.form.get("s2p_save_layers", "on") == "on",
+        s2p_hint_points=request.form.get("s2p_hint_points", "[]"),
     )
     job = manager.create(saved, references, request.form.get("title") or first_name, settings)
     return jsonify({"job_id": job.id})
@@ -85,14 +122,17 @@ def create_job():
 def job_status(job_id: str):
     job = manager.jobs.get(job_id)
     if not job:
-        abort(404)
+        return jsonify({"error": "任务不存在或程序刚刚重启，请重新提交一次。"}), 404
     return jsonify({
         "id": job.id,
         "title": job.title,
         "status": job.status,
         "progress": job.progress,
         "total": job.total,
+        "overall_progress": job.overall_progress,
         "message": job.message,
+        "stages": list(job.stages.values()),
+        "logs": job.logs,
         "previews": job.previews,
         "downloads": {kind: f"/download/{job.id}/{name}" for kind, name in job.downloads.items()},
         "error": job.error,
@@ -115,7 +155,6 @@ def manifest():
 
 
 def main() -> None:
-    # Windowed PyInstaller builds have no stdout/stderr; Werkzeug expects writable streams.
     log = open(ROOT / "InkBloom.log", "a", encoding="utf-8", buffering=1)
     if sys.stdout is None:
         sys.stdout = log

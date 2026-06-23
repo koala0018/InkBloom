@@ -1,18 +1,18 @@
 # Third-party notices
 
-InkBloom includes an ONNX conversion of **Colorful Image Colorization** by Richard Zhang, Phillip Isola and Alexei A. Efros. The original implementation and model are distributed under the BSD 2-Clause License:
+## Style2Paints V4.5
 
-Copyright (c) 2016, Richard Zhang, Phillip Isola, Alexei A. Efros. All rights reserved.
+InkBloom can interoperate with the official Style2Paints V4.5 local application.
 
-Redistribution and use in source and binary forms, with or without modification, are permitted provided that source redistributions retain the copyright notice and disclaimer, and binary redistributions reproduce them in documentation and/or other materials.
+- Source code: Apache License 2.0
+- Official pretrained models and binary releases: all rights reserved by the Style2Paints authors
+- Generated/colorized images: the Style2Paints authors state that users may use their outputs for commercial or non-commercial purposes
+- Source: https://github.com/lllyasviel/style2paints
 
-The software is provided by the copyright holders and contributors “as is”, without warranties; they are not liable for damages arising from its use.
+The official models and binary are not committed to this repository. The installer verifies the size and MD5 metadata of the official `style2paints45beta1214B.zip` distribution.
+
+## Colorful Image Colorization fallback
+
+The optional CPU fallback includes an ONNX conversion of **Colorful Image Colorization** by Richard Zhang, Phillip Isola and Alexei A. Efros, distributed under the BSD 2-Clause License.
 
 Source: https://github.com/richzhang/colorization
-
-## MangaNinja optional engine
-
-The optional high-quality character engine uses MangaNinja by Zhiheng Liu et al., licensed under Creative Commons Attribution-NonCommercial 4.0 International. It is available for non-commercial use only and is downloaded separately when the user installs the character engine.
-
-Source: https://github.com/ali-vilab/MangaNinjia
-License: https://creativecommons.org/licenses/by-nc/4.0/

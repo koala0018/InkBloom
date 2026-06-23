@@ -14,11 +14,19 @@ from .paths import resource_path
 
 @dataclass
 class ColorSettings:
-    engine: str = "ai"
+    engine: str = "style2paints"
     saturation: float = 1.05
     strength: float = 0.95
     line_protection: float = 0.82
     reference_strength: float = 0.90
+    s2p_stage: str = "careful"
+    s2p_finish: str = "blended_smoothed"
+    s2p_save_layers: bool = True
+    s2p_hint_points: str = "[]"
+    lineart_enhance: bool = False
+    lineart_strength: float = 0.65
+    lineart_detail: float = 0.60
+    lineart_weight: float = 0.55
 
 
 def _rgb(path: Path) -> np.ndarray:
@@ -260,8 +268,8 @@ class MultiReferenceColorizer:
 
 
 def make_colorizer(references: list[Path], settings: ColorSettings):
-    if settings.engine == "manganinja":
-        from .manganinja_engine import MangaNinjaColorizer
+    if settings.engine == "style2paints":
+        from .style2paints_engine import Style2PaintsColorizer
 
-        return MangaNinjaColorizer(references, settings)
+        return Style2PaintsColorizer(references, settings)
     return MultiReferenceColorizer(references, settings)
