@@ -1,5 +1,13 @@
 # Third-party notices
 
+## Cobra
+
+InkBloom includes an integration of Cobra and its local inference environment.
+
+- License: Apache License 2.0
+- Source: https://github.com/Zhuang2002/Cobra
+- Model: https://huggingface.co/JunhaoZhuang/Cobra
+
 ## Style2Paints V4.5
 
 InkBloom can interoperate with the official Style2Paints V4.5 local application.

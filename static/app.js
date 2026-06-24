@@ -3,8 +3,10 @@ const files = document.querySelector('#files');
 const references = document.querySelector('#references');
 const panel = document.querySelector('#progress-panel');
 const button = document.querySelector('#start');
+const cancelButton = document.querySelector('#cancel-job');
 const stageList = document.querySelector('#stage-list');
 const jobLog = document.querySelector('#job-log');
+let currentJobId = null;
 
 const helpText = {
   'care-stage': ['原生生成阶段', 'Stage I 先根据线稿、参考图和颜色提示产生固有色；Stage II 再以 Stage I 的平涂结果作为条件进行精细渲染。成品通常选择 Stage II，后期绘画底稿可选择 Stage I。'],
@@ -18,9 +20,23 @@ references.addEventListener('change', () => {
   const count = references.files.length;
   document.querySelector('#ref-state').innerHTML = count ? `<strong>✓ 已选择 ${count} 张样例</strong><small>会逐页自动匹配最接近的参考图</small>` : '<strong>＋ 添加多张彩色样例</strong><small>人物、服装、场景越完整越容易匹配</small>';
 });
-for (const [name, id] of [['reference_strength','ref-out'],['saturation','sat-out'],['strength','str-out'],['line_protection','line-out']]) {
+for (const [name, id] of [['reference_strength','ref-out'],['saturation','sat-out'],['strength','str-out'],['line_protection','line-out'],['lineart_strength','lineart-strength-out'],['lineart_detail','lineart-detail-out'],['lineart_weight','lineart-weight-out']]) {
   const input = form.elements[name];
+  if (!input) continue;
   input.addEventListener('input', () => document.querySelector(`#${id}`).textContent = `${Math.round(input.value * 100)}%`);
+}
+for (const [name, id, suffix] of [
+  ['cobra_steps','cobra-steps-out',''],
+  ['cobra_top_k','cobra-topk-out',''],
+  ['cobra_color_strength','cobra-color-out','%'],
+  ['cobra_preserve_lines','cobra-lines-out','%']
+]) {
+  const input = form.elements[name];
+  if (!input) continue;
+  input.addEventListener('input', () => {
+    const value = suffix === '%' ? Math.round(input.value * 100) : input.value;
+    document.querySelector(`#${id}`).textContent = `${value}${suffix}`;
+  });
 }
 
 for (const help of document.querySelectorAll('.help')) {
@@ -45,14 +61,30 @@ form.addEventListener('submit', async (event) => {
   panel.scrollIntoView({behavior:'smooth'});
   stageList.innerHTML = '';
   jobLog.innerHTML = '';
+  document.querySelector('#previews').innerHTML = '';
+  document.querySelector('#downloads').innerHTML = '';
+  cancelButton.disabled = true;
   try {
     const response = await fetch('/api/jobs', {method:'POST', body:new FormData(form)});
     const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || '创建任务失败');
+    currentJobId = data.job_id;
+    cancelButton.disabled = false;
     poll(data.job_id);
   } catch (error) {
     showError(error.message);
   }
+});
+
+cancelButton.addEventListener('click', async () => {
+  if (!currentJobId) return;
+  cancelButton.disabled = true;
+  document.querySelector('#progress-message').textContent = '正在取消任务…';
+  try {
+    await fetch(`/api/jobs/${currentJobId}/cancel`, {method:'POST'});
+  } catch (_error) {}
+  button.disabled = false;
+  button.textContent = '重新提交';
 });
 
 function renderStages(stages) {
@@ -83,7 +115,7 @@ async function poll(id) {
     renderLogs(job.logs || []);
     const previews = document.querySelector('#previews');
     if (previews.children.length !== job.previews.length) {
-      previews.innerHTML = job.previews.slice(-6).map(url => `<img src="${url}?v=${job.progress}" alt="上色预览">`).join('');
+      previews.innerHTML = job.previews.slice(-6).map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}?v=${job.progress}" alt="高清预览"></a>`).join('');
     }
     if (job.status === 'done') {
       document.querySelector('#progress-number').textContent = '完成';
@@ -91,10 +123,20 @@ async function poll(id) {
       const links = [];
       if (job.downloads.pdf) links.push(`<a href="${job.downloads.pdf}">下载彩色 PDF</a>`);
       if (job.downloads.cbz) links.push(`<a href="${job.downloads.cbz}">下载彩色 CBZ</a>`);
+      if (job.downloads.bundle) links.push(`<a href="${job.downloads.bundle}">下载分卷 PDF / CBZ 合集</a>`);
+      if (job.downloads.lineart) links.push(`<a href="${job.downloads.lineart}">下载高清重绘线稿 ZIP</a>`);
       if (job.downloads.layers) links.push(`<a href="${job.downloads.layers}">下载 8 层 Style2Paints ZIP</a>`);
       document.querySelector('#downloads').innerHTML = links.join('');
+      cancelButton.disabled = true;
       button.disabled = false;
       button.innerHTML = '再处理一部 <span>→</span>';
+      return;
+    }
+    if (job.status === 'cancelled') {
+      document.querySelector('#progress-number').textContent = '已取消';
+      cancelButton.disabled = true;
+      button.disabled = false;
+      button.textContent = '重新提交';
       return;
     }
     if (job.status === 'error') throw new Error(job.error || '处理失败');

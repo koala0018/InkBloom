@@ -13,6 +13,7 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 from werkzeug.utils import secure_filename
 
 from comic_colorizer.colorizer import ColorSettings
+from comic_colorizer.cobra_engine import CobraColorizer
 from comic_colorizer.jobs import JobManager
 from comic_colorizer.paths import MODELS, OUTPUT, ROOT, WORK, ensure_dirs, portable_env, resource_path
 
@@ -40,6 +41,7 @@ def not_found(_error):
         "index.html",
         lan_url=f"http://{local_ip()}:17860",
         style2paints_ready=(MODELS / "style2paints" / "READY").exists(),
+        cobra_ready=CobraColorizer.available(),
     ), 404
 
 
@@ -65,6 +67,7 @@ def index():
         "index.html",
         lan_url=f"http://{local_ip()}:17860",
         style2paints_ready=(MODELS / "style2paints" / "READY").exists(),
+        cobra_ready=CobraColorizer.available(),
     )
 
 
@@ -72,6 +75,7 @@ def index():
 def engine_status():
     return jsonify({
         "style2paints": (MODELS / "style2paints" / "READY").exists(),
+        "cobra": CobraColorizer.available(),
         "onnx": resource_path("assets/models/eccv16-colorizer.onnx").exists(),
     })
 
@@ -104,7 +108,7 @@ def create_job():
 
     first_name = Path(files[0].filename or "comic").stem
     settings = ColorSettings(
-        engine=request.form.get("engine", "style2paints"),
+        engine=request.form.get("engine", "cobra"),
         saturation=float(request.form.get("saturation", 1.05)),
         strength=float(request.form.get("strength", 0.95)),
         line_protection=float(request.form.get("line_protection", 0.82)),
@@ -113,6 +117,19 @@ def create_job():
         s2p_finish=request.form.get("s2p_finish", "blended_smoothed"),
         s2p_save_layers=request.form.get("s2p_save_layers", "on") == "on",
         s2p_hint_points=request.form.get("s2p_hint_points", "[]"),
+        cobra_style=request.form.get("cobra_style", "line_shadow"),
+        cobra_steps=int(request.form.get("cobra_steps", 10)),
+        cobra_top_k=int(request.form.get("cobra_top_k", 4)),
+        cobra_seed=int(request.form.get("cobra_seed", 1)),
+        cobra_preserve_lines=float(request.form.get("cobra_preserve_lines", 0.88)),
+        cobra_color_strength=float(request.form.get("cobra_color_strength", 0.96)),
+        lineart_enhance=request.form.get("lineart_enhance", "") == "on",
+        lineart_backend="safe",
+        lineart_strength=float(request.form.get("lineart_strength", 0.65)),
+        lineart_detail=float(request.form.get("lineart_detail", 0.60)),
+        lineart_weight=float(request.form.get("lineart_weight", 0.55)),
+        lineart_prompt=request.form.get("lineart_prompt", ColorSettings.lineart_prompt),
+        lineart_negative=request.form.get("lineart_negative", ColorSettings.lineart_negative),
     )
     job = manager.create(saved, references, request.form.get("title") or first_name, settings)
     return jsonify({"job_id": job.id})
@@ -139,9 +156,23 @@ def job_status(job_id: str):
     })
 
 
+@app.post("/api/jobs/<job_id>/cancel")
+def cancel_job(job_id: str):
+    job = manager.jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "任务不存在或程序刚刚重启，请重新提交一次。"}), 404
+    manager.cancel(job_id)
+    return jsonify({"ok": True})
+
+
 @app.get("/preview/<job_id>/<name>")
 def preview(job_id: str, name: str):
     return send_from_directory(WORK / job_id / "colored", name)
+
+
+@app.get("/lineart-preview/<job_id>/<name>")
+def lineart_preview(job_id: str, name: str):
+    return send_from_directory(WORK / job_id / "enhanced-lineart", name)
 
 
 @app.get("/download/<job_id>/<name>")

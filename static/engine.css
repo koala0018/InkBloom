@@ -14,7 +14,7 @@
 .choice input:checked+span{border-color:var(--accent);background:#e5734710}
 .choice small,.toggle small{color:var(--muted);font-size:10px;line-height:1.45}
 .select-label{position:relative}
-select,textarea{width:100%;margin-top:8px;background:#14171e;border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:10px;font:inherit}
+select,textarea,.advanced input[type=text],.advanced input:not([type]){width:100%;margin-top:8px;background:#14171e;border:1px solid var(--line);border-radius:8px;color:var(--ink);padding:10px;font:inherit}
 .toggle{display:flex!important;align-items:flex-start;gap:8px;margin:12px 0!important}
 .toggle input{margin-top:3px;accent-color:var(--accent)}
 .toggle span{display:flex;flex-direction:column;gap:3px}
@@ -33,5 +33,12 @@ select,textarea{width:100%;margin-top:8px;background:#14171e;border:1px solid va
 .log-head{display:flex;justify-content:space-between;align-items:center;margin:16px 0 6px;font-size:11px;color:#b9bbc2}.log-head button{width:auto;margin:0;padding:4px 9px;background:transparent;border:1px solid var(--line);color:var(--muted);font-size:10px}
 .job-log{height:190px;overflow:auto;background:#0d0f14;border:1px solid #292d36;border-radius:8px;padding:9px;font:11px/1.65 Consolas,"Microsoft YaHei",monospace}
 .job-log div{display:grid;grid-template-columns:58px 1fr;gap:8px;color:#aeb2bc}.job-log time{color:#606673}.job-log .error span{color:#ff8d83}.job-log .success span{color:#8fd3a5}
+.task-actions{display:flex;align-items:center;gap:10px;margin:10px 0 16px}
+.task-actions button{width:auto;margin:0;padding:8px 12px;background:#2a2e37;color:#ffb0a8;border:1px solid #5b3030}
+.task-actions button:disabled{opacity:.45;cursor:not-allowed}
+.task-actions span{color:var(--muted);font-size:10px}
+.previews a{display:block;position:relative}
+.previews a::after{content:"点击查看高清";position:absolute;left:6px;bottom:6px;background:#0009;color:white;font-size:10px;padding:3px 6px;border-radius:999px;opacity:0;transition:.2s}
+.previews a:hover::after{opacity:1}
 dialog{width:min(520px,90vw);background:#191c24;color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:25px}dialog::backdrop{background:#050608b8}.dialog-close{position:absolute;right:12px;top:9px;width:auto;margin:0;padding:4px 8px;background:transparent;color:#aaa;font-size:20px}dialog p{color:var(--muted);line-height:1.75}
 @media(max-width:1000px){.workspace{grid-template-columns:1fr}.card{min-height:auto}.stage-list{grid-template-columns:repeat(2,1fr)}}

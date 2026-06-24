@@ -17,6 +17,8 @@ if (!(Test-Path -LiteralPath (Join-Path $sourceStyle2Paints 'READY')) -and
   --add-data "templates;templates" --add-data "static;static" `
   --add-data "assets\models;assets\models" `
   --add-data "install-style2paints.ps1;." `
+  --add-data "install-cobra.ps1;." `
+  --add-data "tools\cobra_worker.py;tools" `
   --collect-all fitz --collect-all cv2 app.py
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller build failed.' }
 New-Item -ItemType Directory -Force release | Out-Null

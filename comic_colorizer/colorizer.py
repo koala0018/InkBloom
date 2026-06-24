@@ -14,7 +14,7 @@ from .paths import resource_path
 
 @dataclass
 class ColorSettings:
-    engine: str = "style2paints"
+    engine: str = "cobra"
     saturation: float = 1.05
     strength: float = 0.95
     line_protection: float = 0.82
@@ -23,10 +23,19 @@ class ColorSettings:
     s2p_finish: str = "blended_smoothed"
     s2p_save_layers: bool = True
     s2p_hint_points: str = "[]"
+    cobra_style: str = "line_shadow"
+    cobra_steps: int = 10
+    cobra_top_k: int = 4
+    cobra_seed: int = 1
+    cobra_preserve_lines: float = 0.88
+    cobra_color_strength: float = 0.96
     lineart_enhance: bool = False
+    lineart_backend: str = "safe"
     lineart_strength: float = 0.65
     lineart_detail: float = 0.60
     lineart_weight: float = 0.55
+    lineart_prompt: str = "refined clean detailed manga line art, beautiful anime style, sharp expressive face, elegant hair strands, high quality black and white line drawing"
+    lineart_negative: str = "color, gray background, messy artifacts, blurry, low quality, extra fingers, broken face, changed panel layout, unreadable text"
 
 
 def _rgb(path: Path) -> np.ndarray:
@@ -268,6 +277,10 @@ class MultiReferenceColorizer:
 
 
 def make_colorizer(references: list[Path], settings: ColorSettings):
+    if settings.engine == "cobra":
+        from .cobra_engine import CobraColorizer
+
+        return CobraColorizer(references, settings)
     if settings.engine == "style2paints":
         from .style2paints_engine import Style2PaintsColorizer
 

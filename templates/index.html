@@ -7,7 +7,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/engine.css">
-  <title>InkBloom · Style2Paints 漫画上色</title>
+  <title>InkBloom · 多参考 AI 漫画上色</title>
 </head>
 <body>
   <main class="shell">
@@ -17,8 +17,8 @@
     </header>
 
     <section class="hero">
-      <div><span class="eyebrow">STYLE2PAINTS V4.5 WORKFLOW</span><h2>从线稿分区，<em>一步步长出颜色。</em></h2>
-      <p>导入图片、PDF、CBZ 或 ZIP；使用多张人物、服装和场景样例，为每页自动选择最接近的参考图。任务会展示线稿清理、固有色、精细渲染和分层导出的独立进度与日志。</p></div>
+      <div><span class="eyebrow">COBRA MULTI-REFERENCE COLORIZATION</span><h2>让人物与场景，<em>真正记住样例颜色。</em></h2>
+      <p>导入图片、PDF、CBZ 或 ZIP；Cobra 会从多张人物、服装和场景样例中检索对应区域，在保留原线稿的同时完成整本漫画上色。Style2Paints 仍作为快速兼容模式保留。</p></div>
       <div class="privacy"><strong>100%</strong><span>LOCAL<br>PROCESSING</span></div>
     </section>
 
@@ -33,9 +33,10 @@
       </section>
 
       <section class="card reference-card">
-        <div class="step">02</div><h3>样例与 Style2Paints 参数</h3>
+        <div class="step">02</div><h3>样例与上色引擎</h3>
         <div class="engine-switch">
-          <label><input type="radio" name="engine" value="style2paints" checked><span><strong>Style2Paints V4.5</strong><small>{{ '官方程序已就绪' if style2paints_ready else '需要安装官方程序' }}</small></span></label>
+          <label><input type="radio" name="engine" value="cobra" checked><span><strong>Cobra 高质量多参考</strong><small>{{ '模型已就绪 · 推荐' if cobra_ready else '正在安装模型' }}</small></span></label>
+          <label><input type="radio" name="engine" value="style2paints"><span><strong>Style2Paints V4.5</strong><small>{{ '快速兼容模式已就绪' if style2paints_ready else '需要安装官方程序' }}</small></span></label>
           <label><input type="radio" name="engine" value="ai"><span><strong>CPU 兼容模式</strong><small>仅在无法运行官方引擎时使用</small></span></label>
         </div>
 
@@ -44,8 +45,24 @@
           <span id="ref-state"><strong>＋ 添加多张彩色样例</strong><small>人物、服装、场景越完整越容易匹配</small></span>
         </label>
 
+        <fieldset class="native-options cobra-options">
+          <legend>Cobra 多参考参数</legend>
+          <label class="select-label">输入类型
+            <select name="cobra_style">
+              <option value="line_shadow" selected>线稿＋网点阴影（漫画页推荐）</option>
+              <option value="line">纯线稿（画面干净时使用）</option>
+            </select>
+          </label>
+          <label>推理步数 <output id="cobra-steps-out">10</output><input name="cobra_steps" type="range" min="6" max="24" step="1" value="10"></label>
+          <label>参考检索 Top-K <output id="cobra-topk-out">4</output><input name="cobra_top_k" type="range" min="1" max="12" step="1" value="4"></label>
+          <label>色彩强度 <output id="cobra-color-out">96%</output><input name="cobra_color_strength" type="range" min="0.55" max="1" step="0.01" value="0.96"></label>
+          <label>原线稿保护 <output id="cobra-lines-out">88%</output><input name="cobra_preserve_lines" type="range" min="0.5" max="1" step="0.01" value="0.88"></label>
+          <label>随机种子<input name="cobra_seed" type="number" min="0" max="2147483647" value="1"></label>
+          <p class="hint">16GB 显卡建议 Top-K 4。96%色彩强度更接近样例，同时带柔和色度上限；若个别作品过重，可降至88%–92%。</p>
+        </fieldset>
+
         <fieldset class="native-options">
-          <legend>原生生成阶段 <button class="help" type="button" data-help="care-stage">?</button></legend>
+          <legend>Style2Paints 快速模式参数 <button class="help" type="button" data-help="care-stage">?</button></legend>
           <label class="choice"><input type="radio" name="s2p_stage" value="careful" checked><span><b>Stage II · Careful</b><small>经过第二次精细渲染，边界与细节最好，推荐成品使用。</small></span></label>
           <label class="choice"><input type="radio" name="s2p_stage" value="careless"><span><b>Stage I · Careless</b><small>第一次固有色结果，更快、更平，适合继续手工绘制。</small></span></label>
         </fieldset>
@@ -74,12 +91,21 @@
           <label>上色强度 <output id="str-out">95%</output><input name="strength" type="range" min="0.5" max="1" step="0.01" value="0.95"></label>
           <label>线稿保护 <output id="line-out">82%</output><input name="line_protection" type="range" min="0.4" max="1" step="0.01" value="0.82"></label>
         </details>
+
+        <details class="advanced lineart-options">
+          <summary>可选：先清理和强化线稿，再继续上色</summary>
+          <label class="toggle"><input type="checkbox" name="lineart_enhance"><span><b>启用线稿清理增强</b><small>强化线条、清理噪点并保留网点；它不是生成式重绘，不会改变人物画风或重新画五官。</small></span></label>
+          <label>重绘强度 <output id="lineart-strength-out">65%</output><input name="lineart_strength" type="range" min="0" max="1" step="0.01" value="0.65"></label>
+          <label>细节增强 <output id="lineart-detail-out">60%</output><input name="lineart_detail" type="range" min="0" max="1" step="0.01" value="0.60"></label>
+          <label>线条重量 <output id="lineart-weight-out">55%</output><input name="lineart_weight" type="range" min="0" max="1" step="0.01" value="0.55"></label>
+          <p>该功能是轻量级线稿清理，不加载额外大模型，也不会影响 Cobra 或 Style2Paints 上色流程。</p>
+        </details>
       </section>
 
       <section class="card action-card">
         <div class="step">03</div><h3>开始上色</h3>
         <label class="title-label">作品名称<input name="title" placeholder="默认使用文件名"></label>
-        <div class="engine-note"><strong>Style2Paints 工作流</strong><span>线稿清理 → 样例匹配 → Stage I 固有色 → Stage II 精修 → 8 层导出</span></div>
+        <div class="engine-note"><strong>Cobra 工作流</strong><span>线稿分析 → 多样例局部检索 → 参考约束生成 → 原线稿保护 → 高清导出</span></div>
         <button type="submit" id="start">开始批量上色 <span>→</span></button>
         <p class="hint">Style2Paints 代码为 Apache-2.0；官方预训练模型与二进制保留全部权利。生成图片归你所有。</p>
       </section>
@@ -91,6 +117,7 @@
       <div id="stage-list" class="stage-list"></div>
       <div class="log-head"><span>实时任务日志</span><button type="button" id="log-toggle">收起</button></div>
       <div id="job-log" class="job-log" aria-live="polite"></div>
+      <div class="task-actions"><button type="button" id="cancel-job" disabled>取消当前任务</button><span>取消后可立即重新提交；Style2Paints 当前页会在返回后停止后续页。</span></div>
       <div id="previews" class="previews"></div>
       <div id="downloads" class="downloads"></div>
     </section>

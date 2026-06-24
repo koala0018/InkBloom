@@ -46,13 +46,7 @@ def enhance_lineart_page(
     references: list[Path],
     settings: ColorSettings,
 ) -> None:
-    """Conservative manga line-art enhancement.
-
-    This is intentionally not an AI repaint yet. It improves cleanliness,
-    density and detail while preserving the original panel structure, faces
-    and speech bubbles. A later optional backend can replace this with
-    ComfyUI/ControlNet without touching the coloring pipeline.
-    """
+    """Visible, structure-preserving manga clean-up (not generative redraw)."""
     gray = _read_gray(source)
     ref_density, ref_contrast = _reference_profile(references)
 
@@ -90,9 +84,31 @@ def enhance_lineart_page(
     if strength > 0.45:
         mixed = cv2.medianBlur(mixed, 3)
 
-    # Preserve large white areas and avoid turning screentones into mud.
-    white_mask = gray > 245
-    mixed[white_mask] = 255
+    # Keep deliberate screentones and gray fills instead of converting the
+    # whole page into harsh binary ink. The enhanced lines remain visibly
+    # stronger while the source drawing still controls all geometry.
+    base_blur = cv2.GaussianBlur(gray, (0, 0), 0.7 + (1.0 - detail) * 0.5)
+    base = cv2.addWeighted(
+        gray,
+        1.08 + strength * 0.18,
+        base_blur,
+        -(0.08 + strength * 0.18),
+        0,
+    ).astype(np.float32)
+    line_mask = (255.0 - mixed.astype(np.float32)) / 255.0
+    line_mask = cv2.GaussianBlur(line_mask, (3, 3), 0.45)
+    darken = (8.0 + strength * 20.0) * line_mask
+    mixed = np.clip(base - darken, 0, 255).astype(np.uint8)
+
+    # Only restore exterior paper white; enclosed white clothes, walls and
+    # speech balloons keep their cleaned edges.
+    bright = (gray > 248).astype(np.uint8)
+    _count, labels = cv2.connectedComponents(bright, connectivity=8)
+    border_labels = np.unique(
+        np.concatenate((labels[0], labels[-1], labels[:, 0], labels[:, -1]))
+    )
+    exterior = np.isin(labels, border_labels[border_labels != 0])
+    mixed[exterior] = 255
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     Image.fromarray(mixed).convert("RGB").save(destination)
