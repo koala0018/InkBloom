@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 import traceback
+import zlib
 
 
 def emit(event: str, **payload) -> None:
@@ -38,13 +39,24 @@ def main() -> None:
     top_k = min(int(config["top_k"]), safe_top_k, max(1, len(references) * 5))
     emit(
         "memory",
-        message=f"显存安全模式：{total_vram_gb:.1f}GB，实际 Top-K={top_k}",
+        message=(
+            f"显存安全模式：{total_vram_gb:.1f}GB，实际 Top-K={top_k}；"
+            + ("连续页面使用章节固定种子" if config.get("consistency", True) else "逐页使用不同种子")
+        ),
     )
     pages = [Path(path).resolve() for path in config["pages"]]
     output_dir = Path(config["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for index, page in enumerate(pages, 1):
+        if config.get("consistency", True):
+            # Keep one deterministic visual identity per source/chapter.
+            # Incrementing the seed on every page was a major cause of sudden
+            # palette and rendering-style changes between adjacent pages.
+            chapter_key = str(page.parent).encode("utf-8", errors="replace")
+            page_seed = int(config["seed"]) + zlib.crc32(chapter_key) % 100_000
+        else:
+            page_seed = int(config["seed"]) + index - 1
         emit(
             "page_start",
             current=index,
@@ -62,7 +74,7 @@ def main() -> None:
                     extracted,
                     files,
                     resolution,
-                    int(config["seed"]) + index - 1,
+                    page_seed,
                     int(config["steps"]),
                     top_k,
                     hint_mask,

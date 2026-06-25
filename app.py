@@ -10,10 +10,9 @@ import webbrowser
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, send_from_directory
-from werkzeug.utils import secure_filename
-
 from comic_colorizer.colorizer import ColorSettings
 from comic_colorizer.cobra_engine import CobraColorizer
+from comic_colorizer.documents import safe_component
 from comic_colorizer.jobs import JobManager
 from comic_colorizer.paths import MODELS, OUTPUT, ROOT, WORK, ensure_dirs, portable_env, resource_path
 
@@ -27,6 +26,13 @@ app = Flask(
 )
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024
 manager = JobManager()
+
+
+def upload_name(original: str, fallback: str) -> str:
+    path = Path(original.replace("\\", "/"))
+    suffix = path.suffix.lower()
+    stem = safe_component(path.stem, fallback)
+    return f"{stem}{suffix}"
 
 
 def wants_json() -> bool:
@@ -92,8 +98,8 @@ def create_job():
     for index, item in enumerate(files):
         if not item.filename:
             continue
-        name = secure_filename(item.filename) or f"upload_{index}"
-        path = upload_dir / f"{stamp}_{index}_{name}"
+        name = upload_name(item.filename, f"upload_{index}")
+        path = upload_dir / f"{stamp}_{index}__{name}"
         item.save(path)
         saved.append(path)
 
@@ -101,8 +107,8 @@ def create_job():
     for index, reference_file in enumerate(request.files.getlist("references")):
         if not reference_file.filename:
             continue
-        ref_name = secure_filename(reference_file.filename) or f"reference_{index}.png"
-        reference = upload_dir / f"{stamp}_ref_{index}_{ref_name}"
+        ref_name = upload_name(reference_file.filename, f"reference_{index}")
+        reference = upload_dir / f"{stamp}_ref_{index}__{ref_name}"
         reference_file.save(reference)
         references.append(reference)
 
@@ -123,6 +129,8 @@ def create_job():
         cobra_seed=int(request.form.get("cobra_seed", 1)),
         cobra_preserve_lines=float(request.form.get("cobra_preserve_lines", 0.88)),
         cobra_color_strength=float(request.form.get("cobra_color_strength", 0.96)),
+        cobra_consistency=request.form.get("cobra_consistency", "on") == "on",
+        cobra_consistency_strength=float(request.form.get("cobra_consistency_strength", 0.72)),
         lineart_enhance=request.form.get("lineart_enhance", "") == "on",
         lineart_backend="safe",
         lineart_strength=float(request.form.get("lineart_strength", 0.65)),
@@ -167,17 +175,26 @@ def cancel_job(job_id: str):
 
 @app.get("/preview/<job_id>/<name>")
 def preview(job_id: str, name: str):
-    return send_from_directory(WORK / job_id / "colored", name)
+    job = manager.jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "任务不存在或程序刚刚重启，请重新提交一次。"}), 404
+    return send_from_directory(WORK / job.work_name / "colored", name)
 
 
 @app.get("/lineart-preview/<job_id>/<name>")
 def lineart_preview(job_id: str, name: str):
-    return send_from_directory(WORK / job_id / "enhanced-lineart", name)
+    job = manager.jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "任务不存在或程序刚刚重启，请重新提交一次。"}), 404
+    return send_from_directory(WORK / job.work_name / "enhanced-lineart", name)
 
 
 @app.get("/download/<job_id>/<name>")
 def download(job_id: str, name: str):
-    return send_from_directory(OUTPUT / job_id, name, as_attachment=True)
+    job = manager.jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "任务不存在或程序刚刚重启，请重新提交一次。"}), 404
+    return send_from_directory(OUTPUT / job.work_name, name, as_attachment=True)
 
 
 @app.get("/manifest.webmanifest")

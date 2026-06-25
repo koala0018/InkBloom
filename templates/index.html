@@ -57,6 +57,8 @@
           <label>参考检索 Top-K <output id="cobra-topk-out">4</output><input name="cobra_top_k" type="range" min="1" max="12" step="1" value="4"></label>
           <label>色彩强度 <output id="cobra-color-out">96%</output><input name="cobra_color_strength" type="range" min="0.55" max="1" step="0.01" value="0.96"></label>
           <label>原线稿保护 <output id="cobra-lines-out">88%</output><input name="cobra_preserve_lines" type="range" min="0.5" max="1" step="0.01" value="0.88"></label>
+          <label class="toggle"><input type="checkbox" name="cobra_consistency" checked><span><b>连续页面色调锁定</b><small>同一 PDF 或章节沿用稳定随机种子，并以样例图色板为主、上一页为辅，减少突然换色和脏色。</small></span></label>
+          <label>连续性强度 <output id="cobra-consistency-out">72%</output><input name="cobra_consistency_strength" type="range" min="0" max="1" step="0.01" value="0.72"></label>
           <label>随机种子<input name="cobra_seed" type="number" min="0" max="2147483647" value="1"></label>
           <p class="hint">16GB 显卡建议 Top-K 4。96%色彩强度更接近样例，同时带柔和色度上限；若个别作品过重，可降至88%–92%。</p>
         </fieldset>

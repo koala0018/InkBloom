@@ -5,11 +5,12 @@ import threading
 import time
 import uuid
 import zipfile
+import csv
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .colorizer import ColorSettings, make_colorizer
-from .documents import collect_inputs, export_results
+from .documents import collect_inputs, export_results, result_name, safe_component
 from .lineart_enhancer import enhance_pages
 from .paths import OUTPUT, WORK
 
@@ -35,6 +36,7 @@ class JobCancelled(Exception):
 class Job:
     id: str
     title: str
+    work_name: str = ""
     status: str = "queued"
     progress: int = 0
     total: int = 0
@@ -63,6 +65,9 @@ class Job:
             return
         percent = 100 if total <= 0 else max(0, min(100, round(current / total * 100)))
         stage = self.stages[key]
+        # Nested archives and embedded PDFs reveal additional work while being
+        # scanned. Keep the visible bar monotonic even when the total grows.
+        percent = max(stage["progress"], percent)
         stage["progress"] = percent
         stage["message"] = message
         stage["status"] = "done" if percent >= 100 else "running"
@@ -84,9 +89,10 @@ class JobManager:
     def create(self, uploads: list[Path], references: list[Path], title: str, settings: ColorSettings) -> Job:
         self.clean_old(keep=5)
         job_id = uuid.uuid4().hex[:10]
-        job = Job(id=job_id, title=title)
+        work_name = f"{safe_component(title, '漫画')}_{job_id}"
+        job = Job(id=job_id, title=title, work_name=work_name)
         job.log("任务已创建，文件仅在本机处理")
-        job.log(f"单页缓存：{WORK / job_id}；最终成品：{OUTPUT / job_id}")
+        job.log(f"过程文件：{WORK / work_name}；最终成品：{OUTPUT / work_name}")
         self.jobs[job_id] = job
         thread = threading.Thread(
             target=self._run, args=(job, uploads, references, settings), daemon=True
@@ -126,7 +132,7 @@ class JobManager:
         return name
 
     def _run(self, job: Job, uploads: list[Path], references: list[Path], settings: ColorSettings):
-        job_dir = WORK / job.id
+        job_dir = WORK / job.work_name
         page_dir = job_dir / "pages"
         colored_dir = job_dir / "colored"
         colored_dir.mkdir(parents=True, exist_ok=True)
@@ -135,11 +141,30 @@ class JobManager:
             pages, source_kind = collect_inputs(
                 uploads,
                 page_dir,
-                on_warning=lambda message: job.log(message, "error"),
+                on_warning=lambda message: job.log(
+                    message,
+                    "info" if message.startswith("压缩包预检：") else "error",
+                ),
+                on_progress=lambda current, total, message: job.update_stage(
+                    "extract", current, total, message
+                ),
             )
             job.raise_if_cancelled()
             job.total = len(pages)
             job.update_stage("extract", 1, 1, f"文档拆页完成，共 {job.total} 页")
+            index_path = job_dir / "页面索引.csv"
+            with index_path.open("w", encoding="utf-8-sig", newline="") as index_file:
+                writer = csv.writer(index_file)
+                writer.writerow(["全局页码", "来源/章节", "过程页面文件", "预计上色文件"])
+                for index, page in enumerate(pages, 1):
+                    relative = page.relative_to(page_dir)
+                    writer.writerow([
+                        index,
+                        str(relative.parent),
+                        str(relative),
+                        result_name(page, index),
+                    ])
+            job.log(f"页面归类索引已保存：{index_path}")
             if job.total > 250:
                 job.log(f"超大任务将按每 250 页自动分卷导出，共约 {(job.total + 249) // 250} 卷")
             if settings.lineart_enhance:
@@ -161,7 +186,7 @@ class JobManager:
                     job.raise_if_cancelled()
                     job.update_stage(stage, current, total, message)
                     if stage == "layers" and current > 0 and current not in previewed:
-                        target = colored_dir / f"colored_{current:05d}.jpg"
+                        target = colored_dir / result_name(pages[current - 1], current)
                         job.previews.append(f"/preview/{job.id}/{target.name}")
                         job.progress = current
                         previewed.add(current)
@@ -172,7 +197,7 @@ class JobManager:
                 for index, page in enumerate(pages, 1):
                     job.raise_if_cancelled()
                     job.update_stage("stage1", index - 1, len(pages), f"正在上色 {index}/{len(pages)}")
-                    target = colored_dir / f"colored_{index:05d}.jpg"
+                    target = colored_dir / result_name(page, index)
                     engine.colorize(page, target)
                     results.append(target)
                     job.previews.append(f"/preview/{job.id}/{target.name}")
@@ -183,7 +208,7 @@ class JobManager:
 
             job.update_stage("export", 0, 1, "正在生成 PDF、CBZ 与分层压缩包")
             job.raise_if_cancelled()
-            out_dir = OUTPUT / job.id
+            out_dir = OUTPUT / job.work_name
             job.downloads = export_results(results, out_dir, job.title, source_kind)
             layer_name = self._pack_layers(job_dir / "style2paints-layers", out_dir, job.title)
             if layer_name:
@@ -223,8 +248,8 @@ class JobManager:
         if not WORK.exists():
             return
         active = {
-            job_id
-            for job_id, job in self.jobs.items()
+            job.work_name
+            for job in self.jobs.values()
             if job.status not in {"done", "error", "cancelled"}
         }
         candidates = sorted(

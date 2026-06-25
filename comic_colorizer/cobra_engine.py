@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 
 from .colorizer import ColorSettings
+from .documents import result_name
 from .paths import MODELS, ROOT
 
 
@@ -30,6 +31,20 @@ class CobraColorizer:
         self.python = self.root / ".venv" / "Scripts" / "python.exe"
         self.worker = self.root / "inkbloom_worker.py"
         self.log_path = ROOT / "InkBloom-Cobra.log"
+        reference_chroma = []
+        for path in self.references:
+            rgb = np.asarray(Image.open(path).convert("RGB").resize((256, 256)), dtype=np.float32) / 255.0
+            lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+            chroma = lab[..., 1:].reshape(-1, 2)
+            colorful = chroma[np.linalg.norm(chroma, axis=1) > 3.0]
+            if len(colorful):
+                reference_chroma.append(colorful)
+        palette = np.concatenate(reference_chroma) if reference_chroma else np.zeros((1, 2), np.float32)
+        self.reference_mean = np.median(palette, axis=0)
+        self.reference_std = np.maximum(np.std(palette, axis=0), 8.0)
+        self.previous_group: Path | None = None
+        self.previous_mean: np.ndarray | None = None
+        self.previous_std: np.ndarray | None = None
 
     @classmethod
     def available(cls) -> bool:
@@ -44,8 +59,7 @@ class CobraColorizer:
             )
         )
 
-    @staticmethod
-    def _finish_image(source: Path, generated: Path, destination: Path, settings: ColorSettings) -> None:
+    def _finish_image(self, source: Path, generated: Path, destination: Path, settings: ColorSettings) -> None:
         original = np.asarray(Image.open(source).convert("RGB"), dtype=np.uint8)
         result = np.asarray(
             Image.open(generated).convert("RGB").resize(
@@ -80,6 +94,30 @@ class CobraColorizer:
         # Remove small chroma speckles in screentones while keeping character
         # boundaries and deliberate local colors.
         chroma = chroma * 0.28 + filtered * 0.72
+        if settings.cobra_consistency:
+            # Cobra normally chooses reference patches independently for each
+            # page. Anchor every page to the uploaded sample palette and use
+            # the preceding page only as a weak continuity cue inside the same
+            # source/chapter folder.
+            weight = float(np.clip(settings.cobra_consistency_strength, 0.0, 1.0))
+            valid = np.linalg.norm(chroma, axis=2) > 3.0
+            if np.any(valid):
+                page_values = chroma[valid]
+                page_mean = np.median(page_values, axis=0)
+                page_std = np.maximum(np.std(page_values, axis=0), 8.0)
+                group = source.parent
+                continuity_mean = self.reference_mean
+                continuity_std = self.reference_std
+                if self.previous_group == group and self.previous_mean is not None:
+                    continuity_mean = self.reference_mean * 0.78 + self.previous_mean * 0.22
+                    continuity_std = self.reference_std * 0.82 + self.previous_std * 0.18
+                normalized = (chroma - page_mean) / page_std
+                anchored = normalized * continuity_std + continuity_mean
+                chroma = chroma * (1.0 - weight * 0.42) + anchored * (weight * 0.42)
+                final_values = chroma[valid]
+                self.previous_group = group
+                self.previous_mean = np.median(final_values, axis=0)
+                self.previous_std = np.maximum(np.std(final_values, axis=0), 8.0)
         chroma_norm = np.linalg.norm(chroma, axis=2, keepdims=True)
         soft_limit = 62.0
         chroma *= np.tanh(chroma_norm / soft_limit) * soft_limit / np.maximum(chroma_norm, 1e-5)
@@ -127,6 +165,7 @@ class CobraColorizer:
             "steps": max(4, min(30, int(self.settings.cobra_steps))),
             "top_k": max(1, min(20, int(self.settings.cobra_top_k))),
             "seed": int(self.settings.cobra_seed),
+            "consistency": bool(self.settings.cobra_consistency),
         }
         config_path = output_dir.parent / "cobra-job.json"
         config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
@@ -183,7 +222,7 @@ class CobraColorizer:
                         raw = raw_dir / f"cobra_{current:05d}.png"
                         if not raw.exists():
                             raise RuntimeError(f"Cobra 缺少第 {current} 页输出")
-                        destination = output_dir / f"colored_{current:05d}.jpg"
+                        destination = output_dir / result_name(pages[current - 1], current)
                         self._finish_image(pages[current - 1], raw, destination, self.settings)
                         raw.unlink(missing_ok=True)
                         results.append(destination)
@@ -194,7 +233,7 @@ class CobraColorizer:
                     elif kind == "page_retry":
                         callback("stage1", current - 1, total, message)
                     elif kind == "page_failed":
-                        destination = output_dir / f"colored_{current:05d}.jpg"
+                        destination = output_dir / result_name(pages[current - 1], current)
                         Image.open(pages[current - 1]).convert("RGB").save(
                             destination, quality=96, subsampling=0
                         )
@@ -223,7 +262,7 @@ class CobraColorizer:
             raw = raw_dir / f"cobra_{index:05d}.png"
             if not raw.exists():
                 raise RuntimeError(f"Cobra 缺少第 {index} 页输出")
-            destination = output_dir / f"colored_{index:05d}.jpg"
+            destination = output_dir / result_name(page, index)
             self._finish_image(page, raw, destination, self.settings)
             raw.unlink(missing_ok=True)
             results.append(destination)

@@ -29,6 +29,8 @@ class ColorSettings:
     cobra_seed: int = 1
     cobra_preserve_lines: float = 0.88
     cobra_color_strength: float = 0.96
+    cobra_consistency: bool = True
+    cobra_consistency_strength: float = 0.72
     lineart_enhance: bool = False
     lineart_backend: str = "safe"
     lineart_strength: float = 0.65

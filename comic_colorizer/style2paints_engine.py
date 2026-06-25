@@ -19,6 +19,7 @@ import numpy as np
 from PIL import Image
 
 from .colorizer import ColorSettings, RegionReferenceMatcher, _rgb
+from .documents import result_name
 from .paths import MODELS, ROOT
 
 
@@ -304,7 +305,7 @@ class Style2PaintsColorizer:
             original = Image.open(page).convert("RGB")
             if chosen.size != original.size:
                 chosen = chosen.resize(original.size, Image.Resampling.LANCZOS)
-            destination = output_dir / f"colored_{index:05d}.jpg"
+            destination = output_dir / result_name(page, index)
             chosen.save(destination, quality=96, subsampling=0)
             results.append(destination)
 

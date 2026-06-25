@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image
 
 from .colorizer import ColorSettings
+from .documents import result_name
 
 
 ProgressCallback = Callable[[str, int, int, str], None]
@@ -126,7 +127,7 @@ def enhance_pages(
     for index, page in enumerate(pages, 1):
         if callback:
             callback("redraw", index - 1, len(pages), f"第 {index} 页：正在增强线稿")
-        target = output_dir / f"lineart_{index:05d}.png"
+        target = output_dir / result_name(page, index, "lineart", ".png")
         enhance_lineart_page(page, target, references, settings)
         results.append(target)
         if callback:

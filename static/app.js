@@ -29,7 +29,8 @@ for (const [name, id, suffix] of [
   ['cobra_steps','cobra-steps-out',''],
   ['cobra_top_k','cobra-topk-out',''],
   ['cobra_color_strength','cobra-color-out','%'],
-  ['cobra_preserve_lines','cobra-lines-out','%']
+  ['cobra_preserve_lines','cobra-lines-out','%'],
+  ['cobra_consistency_strength','cobra-consistency-out','%']
 ]) {
   const input = form.elements[name];
   if (!input) continue;
