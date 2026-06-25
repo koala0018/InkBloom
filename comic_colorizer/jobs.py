@@ -154,7 +154,7 @@ class JobManager:
         self.lock = threading.Lock()
 
     def create(self, uploads: list[Path], references: list[Path], title: str, settings: ColorSettings) -> Job:
-        self.clean_old(keep=5)
+        self.clean_old(keep=20)
         job_id = uuid.uuid4().hex[:10]
         work_name = f"{safe_component(title, '漫画', max_length=80)}_{job_id}"
         job = Job(id=job_id, title=title, work_name=work_name)
