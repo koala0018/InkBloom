@@ -160,6 +160,7 @@ def job_status(job_id: str):
         "logs": job.logs,
         "previews": job.previews,
         "downloads": {kind: f"/download/{job.id}/{name}" for kind, name in job.downloads.items()},
+        "decision": job.pending_decision,
         "error": job.error,
     })
 
@@ -173,12 +174,57 @@ def cancel_job(job_id: str):
     return jsonify({"ok": True})
 
 
+@app.post("/api/jobs/<job_id>/decision")
+def resolve_job_decision(job_id: str):
+    job = manager.jobs.get(job_id)
+    if not job or not job.pending_decision:
+        return jsonify({"error": "当前任务没有等待确认的选项"}), 409
+    added = request.files.get("reference")
+    if added and added.filename:
+        reference_dir = WORK / job.work_name / "references"
+        reference_dir.mkdir(parents=True, exist_ok=True)
+        name = upload_name(added.filename, f"补充样例_{len(job.reference_paths) + 1}")
+        target = reference_dir / f"{len(job.reference_paths) + 1:03d}_{name}"
+        added.save(target)
+        job.resolve_decision({"new_reference": str(target)})
+        return jsonify({"ok": True, "message": "新参考图已加入当前任务"})
+    choice = request.form.get("choice", "")
+    if not choice.startswith("reference:"):
+        return jsonify({"error": "请选择一张候选样例图"}), 400
+    try:
+        index = int(choice.split(":", 1)[1])
+    except ValueError:
+        return jsonify({"error": "参考图选项无效"}), 400
+    if index < 0 or index >= len(job.reference_paths):
+        return jsonify({"error": "参考图不存在"}), 400
+    job.resolve_decision({"reference": index})
+    return jsonify({"ok": True})
+
+
 @app.get("/preview/<job_id>/<name>")
 def preview(job_id: str, name: str):
     job = manager.jobs.get(job_id)
     if not job:
         return jsonify({"error": "任务不存在或程序刚刚重启，请重新提交一次。"}), 404
     return send_from_directory(WORK / job.work_name / "colored", name)
+
+
+@app.get("/source-preview/<job_id>/<int:index>")
+def source_preview(job_id: str, index: int):
+    job = manager.jobs.get(job_id)
+    if not job or index < 0 or index >= len(job.source_pages):
+        return jsonify({"error": "底稿不存在"}), 404
+    page = job.source_pages[index]
+    return send_from_directory(page.parent, page.name)
+
+
+@app.get("/reference-preview/<job_id>/<int:index>")
+def reference_preview(job_id: str, index: int):
+    job = manager.jobs.get(job_id)
+    if not job or index < 0 or index >= len(job.reference_paths):
+        return jsonify({"error": "参考图不存在"}), 404
+    reference = job.reference_paths[index]
+    return send_from_directory(reference.parent, reference.name)
 
 
 @app.get("/lineart-preview/<job_id>/<name>")

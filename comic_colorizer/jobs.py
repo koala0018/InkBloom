@@ -46,6 +46,11 @@ class Job:
     downloads: dict[str, str] = field(default_factory=dict)
     error: str | None = None
     cancel_requested: bool = False
+    source_pages: list[Path] = field(default_factory=list)
+    reference_paths: list[Path] = field(default_factory=list)
+    pending_decision: dict | None = None
+    decision_result: dict | None = None
+    decision_condition: threading.Condition = field(default_factory=threading.Condition, repr=False)
     stages: dict[str, dict] = field(
         default_factory=lambda: {
             key: {"key": key, "label": label, "status": "pending", "progress": 0, "message": "等待"}
@@ -80,6 +85,52 @@ class Job:
         if self.cancel_requested:
             raise JobCancelled("任务已取消")
 
+    def ask_reference(self, page_index: int, candidates: list[int], previous: int | None) -> dict:
+        options = [
+            {
+                "id": f"reference:{index}",
+                "label": f"样例 {index + 1}",
+                "image": f"/reference-preview/{self.id}/{index}",
+            }
+            for index in candidates
+        ]
+        if previous is not None:
+            options.insert(
+                0,
+                {
+                    "id": f"reference:{previous}",
+                    "label": f"沿用上一页（样例 {previous + 1}）",
+                    "image": f"/reference-preview/{self.id}/{previous}",
+                    "recommended": True,
+                },
+            )
+        with self.decision_condition:
+            self.decision_result = None
+            self.pending_decision = {
+                "kind": "reference",
+                "page": page_index + 1,
+                "title": f"第 {page_index + 1} 页参考图匹配不明确",
+                "message": "请对照黑白底稿选择最接近人物、服装或场景的彩色样例，也可以补充新参考图。",
+                "source": f"/source-preview/{self.id}/{page_index}",
+                "options": options,
+            }
+            self.status = "waiting_user"
+            self.message = f"第 {page_index + 1} 页等待你确认参考图"
+            self.log(self.message)
+            while self.decision_result is None and not self.cancel_requested:
+                self.decision_condition.wait(timeout=1.0)
+            self.raise_if_cancelled()
+            result = self.decision_result or {}
+            self.pending_decision = None
+            self.status = "reference"
+            self.log(f"第 {page_index + 1} 页已收到参考图选择，继续处理")
+            return result
+
+    def resolve_decision(self, result: dict) -> None:
+        with self.decision_condition:
+            self.decision_result = result
+            self.decision_condition.notify_all()
+
 
 class JobManager:
     def __init__(self):
@@ -108,6 +159,8 @@ class JobManager:
         job.status = "cancelled"
         job.message = "正在取消任务"
         job.log("已请求取消任务；当前页如果正在提交给 Style2Paints，会在本页返回后停止。", "error")
+        with job.decision_condition:
+            job.decision_condition.notify_all()
 
     @staticmethod
     def _pack_layers(layer_dir: Path, out_dir: Path, title: str) -> str | None:
@@ -136,7 +189,19 @@ class JobManager:
         page_dir = job_dir / "pages"
         colored_dir = job_dir / "colored"
         colored_dir.mkdir(parents=True, exist_ok=True)
+        original_references = list(references)
         try:
+            reference_dir = job_dir / "references"
+            reference_dir.mkdir(parents=True, exist_ok=True)
+            local_references: list[Path] = []
+            for index, reference in enumerate(references, 1):
+                target = reference_dir / (
+                    f"{index:03d}_{safe_component(reference.stem, '样例')}{reference.suffix.lower()}"
+                )
+                shutil.copy2(reference, target)
+                local_references.append(target)
+            references = local_references
+            job.reference_paths = references
             job.update_stage("extract", 0, 1, "正在展开漫画文档")
             pages, source_kind = collect_inputs(
                 uploads,
@@ -151,6 +216,7 @@ class JobManager:
             )
             job.raise_if_cancelled()
             job.total = len(pages)
+            job.source_pages = pages
             job.update_stage("extract", 1, 1, f"文档拆页完成，共 {job.total} 页")
             index_path = job_dir / "页面索引.csv"
             with index_path.open("w", encoding="utf-8-sig", newline="") as index_file:
@@ -176,6 +242,14 @@ class JobManager:
             else:
                 job.update_stage("redraw", 1, 1, "未启用，保留原始线稿")
             engine = make_colorizer(references, settings)
+            if hasattr(engine, "prepare_reference_plan"):
+                engine.prepare_reference_plan(
+                    pages,
+                    lambda page_index, candidates, previous: job.ask_reference(
+                        page_index, candidates, previous
+                    ),
+                    job.reference_paths,
+                )
             job.raise_if_cancelled()
             results: list[Path] = []
 
@@ -241,7 +315,7 @@ class JobManager:
         finally:
             for upload in uploads:
                 upload.unlink(missing_ok=True)
-            for reference in references:
+            for reference in original_references:
                 reference.unlink(missing_ok=True)
 
     def clean_old(self, keep: int = 5) -> None:

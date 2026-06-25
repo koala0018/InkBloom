@@ -30,7 +30,7 @@ def main() -> None:
 
     emit("ready", message="Cobra 模型加载完成")
     references = [Path(path).resolve() for path in config["references"]]
-    files = [type("ReferenceFile", (), {"name": str(path)})() for path in references]
+    all_files = [type("ReferenceFile", (), {"name": str(path)})() for path in references]
     # Cobra expands Top-K across four query regions. On a 16 GB GPU, K=12
     # means 48 reference tensors and causes WDDM to spill CUDA allocations
     # into shared system memory. Keep a conservative automatic ceiling.
@@ -49,6 +49,11 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for index, page in enumerate(pages, 1):
+        plan = config.get("reference_plan") or []
+        selected = plan[index - 1] if index - 1 < len(plan) else list(range(len(all_files)))
+        files = [all_files[int(item)] for item in selected if int(item) < len(all_files)]
+        if not files:
+            files = all_files
         if config.get("consistency", True):
             # Keep one deterministic visual identity per source/chapter.
             # Incrementing the seed on every page was a major cause of sudden

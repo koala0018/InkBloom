@@ -117,6 +117,17 @@
       <div class="progress-head"><div><span class="eyebrow">PROCESSING PIPELINE</span><h3 id="progress-message">准备中</h3></div><strong id="progress-number">0%</strong></div>
       <div class="bar"><i id="progress-bar"></i></div>
       <div id="stage-list" class="stage-list"></div>
+      <section id="decision-panel" class="decision-panel hidden">
+        <div><span class="eyebrow">NEEDS YOUR CHOICE</span><h3 id="decision-title"></h3><p id="decision-message"></p></div>
+        <div class="decision-compare">
+          <figure><figcaption>当前黑白底稿</figcaption><a id="decision-source-link" target="_blank" rel="noopener"><img id="decision-source" alt="当前黑白底稿"></a></figure>
+          <div><strong>选择对应的彩色样例</strong><div id="decision-options" class="decision-options"></div></div>
+        </div>
+        <div class="decision-actions">
+          <button type="button" id="decision-confirm" disabled>使用所选样例并继续</button>
+          <label class="decision-upload">补充新的参考图<input id="decision-reference" type="file" accept="image/*"></label>
+        </div>
+      </section>
       <div class="log-head"><span>实时任务日志</span><button type="button" id="log-toggle">收起</button></div>
       <div id="job-log" class="job-log" aria-live="polite"></div>
       <div class="task-actions"><button type="button" id="cancel-job" disabled>取消当前任务</button><span>取消后可立即重新提交；Style2Paints 当前页会在返回后停止后续页。</span></div>

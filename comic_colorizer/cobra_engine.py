@@ -45,6 +45,7 @@ class CobraColorizer:
         self.previous_group: Path | None = None
         self.previous_mean: np.ndarray | None = None
         self.previous_std: np.ndarray | None = None
+        self.reference_plan: list[list[int]] = []
 
     @classmethod
     def available(cls) -> bool:
@@ -58,6 +59,62 @@ class CobraColorizer:
                 root / "READY",
             )
         )
+
+    @staticmethod
+    def _match_feature(path: Path) -> np.ndarray:
+        gray = np.asarray(Image.open(path).convert("L").resize((128, 128)), dtype=np.uint8)
+        histogram = cv2.calcHist([gray], [0], None, [24], [0, 256]).ravel()
+        histogram /= max(float(histogram.sum()), 1.0)
+        edges = cv2.Canny(gray, 50, 150).astype(np.float32) / 255.0
+        thumbnail = cv2.resize(gray, (24, 24), interpolation=cv2.INTER_AREA).astype(np.float32)
+        thumbnail = (thumbnail - thumbnail.mean()) / max(float(thumbnail.std()), 1.0)
+        return np.r_[histogram * 2.0, edges.mean(), thumbnail.ravel() * 0.035]
+
+    def prepare_reference_plan(self, pages, ask, reference_paths) -> None:
+        if len(reference_paths) <= 1:
+            self.reference_plan = [[0] for _ in pages]
+            return
+        reference_features = [self._match_feature(path) for path in reference_paths]
+        previous_choice: int | None = None
+        previous_page_feature: np.ndarray | None = None
+        previous_group: Path | None = None
+        self.reference_plan = []
+        for page_index, page in enumerate(pages):
+            page_feature = self._match_feature(page)
+            distances = np.array(
+                [np.mean((page_feature - feature) ** 2) for feature in reference_features]
+            )
+            ranked = np.argsort(distances)
+            best = int(ranked[0])
+            margin = float(distances[ranked[1]] - distances[ranked[0]])
+            scene_change = (
+                previous_page_feature is None
+                or page.parent != previous_group
+                or float(np.mean((page_feature - previous_page_feature) ** 2)) > 0.055
+            )
+            ambiguous = margin < 0.012
+            if previous_choice is not None and not scene_change:
+                choice = previous_choice
+            elif ambiguous:
+                result = ask(page_index, [int(item) for item in ranked[:4]], previous_choice)
+                if result.get("new_reference"):
+                    new_path = Path(result["new_reference"]).resolve()
+                    self.references.append(new_path)
+                    reference_paths.append(new_path)
+                    reference_features.append(self._match_feature(new_path))
+                    choice = len(reference_features) - 1
+                else:
+                    choice = int(result.get("reference", best))
+            else:
+                choice = best
+            # The selected image is intentionally first and repeated once.
+            # Cobra therefore treats the user's decision as the dominant
+            # reference while retaining one secondary structural candidate.
+            secondary = next((int(item) for item in ranked if int(item) != choice), choice)
+            self.reference_plan.append([choice, choice, secondary])
+            previous_choice = choice
+            previous_page_feature = page_feature
+            previous_group = page.parent
 
     def _finish_image(self, source: Path, generated: Path, destination: Path, settings: ColorSettings) -> None:
         original = np.asarray(Image.open(source).convert("RGB"), dtype=np.uint8)
@@ -160,6 +217,7 @@ class CobraColorizer:
             "repo": str(self.repo),
             "pages": [str(path.resolve()) for path in pages],
             "references": [str(path) for path in self.references],
+            "reference_plan": self.reference_plan,
             "output_dir": str(raw_dir.resolve()),
             "style": "line + shadow" if self.settings.cobra_style == "line_shadow" else "line",
             "steps": max(4, min(30, int(self.settings.cobra_steps))),

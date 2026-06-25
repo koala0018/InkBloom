@@ -7,6 +7,7 @@ const cancelButton = document.querySelector('#cancel-job');
 const stageList = document.querySelector('#stage-list');
 const jobLog = document.querySelector('#job-log');
 let currentJobId = null;
+let renderedDecisionKey = '';
 
 const helpText = {
   'care-stage': ['原生生成阶段', 'Stage I 先根据线稿、参考图和颜色提示产生固有色；Stage II 再以 Stage I 的平涂结果作为条件进行精细渲染。成品通常选择 Stage II，后期绘画底稿可选择 Stage I。'],
@@ -70,6 +71,7 @@ form.addEventListener('submit', async (event) => {
     const data = await readJson(response);
     if (!response.ok) throw new Error(data.error || '创建任务失败');
     currentJobId = data.job_id;
+    history.replaceState(null, '', `/?job=${encodeURIComponent(currentJobId)}`);
     cancelButton.disabled = false;
     poll(data.job_id);
   } catch (error) {
@@ -103,6 +105,55 @@ function renderLogs(logs) {
   jobLog.scrollTop = jobLog.scrollHeight;
 }
 
+function renderDecision(decision) {
+  const box = document.querySelector('#decision-panel');
+  if (!decision) {
+    box.classList.add('hidden');
+    renderedDecisionKey = '';
+    return;
+  }
+  const key = `${decision.kind}:${decision.page}`;
+  box.classList.remove('hidden');
+  if (renderedDecisionKey === key) return;
+  renderedDecisionKey = key;
+  document.querySelector('#decision-title').textContent = decision.title;
+  document.querySelector('#decision-message').textContent = decision.message;
+  const source = document.querySelector('#decision-source');
+  source.src = `${decision.source}?v=${Date.now()}`;
+  document.querySelector('#decision-source-link').href = decision.source;
+  document.querySelector('#decision-options').innerHTML = decision.options.map(option => `
+    <label class="decision-option">
+      <input type="radio" name="reference-decision" value="${option.id}">
+      <span><img src="${option.image}" alt="${escapeHtml(option.label)}"><b>${escapeHtml(option.label)}</b></span>
+      ${option.recommended ? '<em>推荐</em>' : ''}
+    </label>`).join('');
+  const confirm = document.querySelector('#decision-confirm');
+  confirm.disabled = true;
+  document.querySelectorAll('input[name="reference-decision"]').forEach(input => {
+    input.addEventListener('change', () => confirm.disabled = false);
+  });
+}
+
+document.querySelector('#decision-confirm').addEventListener('click', async () => {
+  const selected = document.querySelector('input[name="reference-decision"]:checked');
+  if (!selected || !currentJobId) return;
+  const data = new FormData();
+  data.append('choice', selected.value);
+  document.querySelector('#decision-confirm').disabled = true;
+  await fetch(`/api/jobs/${currentJobId}/decision`, {method:'POST', body:data});
+});
+
+document.querySelector('#decision-reference').addEventListener('change', async (event) => {
+  const reference = event.target.files[0];
+  if (!reference || !currentJobId) return;
+  const data = new FormData();
+  data.append('reference', reference);
+  event.target.disabled = true;
+  await fetch(`/api/jobs/${currentJobId}/decision`, {method:'POST', body:data});
+  event.target.disabled = false;
+  event.target.value = '';
+});
+
 async function poll(id) {
   try {
     const response = await fetch(`/api/jobs/${id}`);
@@ -114,6 +165,7 @@ async function poll(id) {
     document.querySelector('#progress-bar').style.width = `${percent}%`;
     renderStages(job.stages || []);
     renderLogs(job.logs || []);
+    renderDecision(job.decision);
     const previews = document.querySelector('#previews');
     if (previews.children.length !== job.previews.length) {
       previews.innerHTML = job.previews.slice(-6).map(url => `<a href="${url}" target="_blank" rel="noopener"><img src="${url}?v=${job.progress}" alt="高清预览"></a>`).join('');
@@ -171,4 +223,12 @@ function showError(message) {
   jobLog.innerHTML += `<div class="error"><time>错误</time><span>${escapeHtml(message)}</span></div>`;
   button.disabled = false;
   button.textContent = '重试';
+}
+
+const resumedJobId = new URLSearchParams(location.search).get('job');
+if (resumedJobId) {
+  currentJobId = resumedJobId;
+  panel.classList.remove('hidden');
+  cancelButton.disabled = false;
+  poll(resumedJobId);
 }
