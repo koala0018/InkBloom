@@ -131,6 +131,7 @@ def create_job():
         cobra_color_strength=float(request.form.get("cobra_color_strength", 0.96)),
         cobra_consistency=request.form.get("cobra_consistency", "on") == "on",
         cobra_consistency_strength=float(request.form.get("cobra_consistency_strength", 0.72)),
+        cobra_reference_confirmation=request.form.get("cobra_reference_confirmation", "") == "on",
         lineart_enhance=request.form.get("lineart_enhance", "") == "on",
         lineart_backend="safe",
         lineart_strength=float(request.form.get("lineart_strength", 0.65)),
@@ -158,7 +159,9 @@ def job_status(job_id: str):
         "message": job.message,
         "stages": list(job.stages.values()),
         "logs": job.logs,
-        "previews": job.previews,
+        # The browser only displays the newest previews. Returning thousands
+        # of long URLs made status polling unnecessarily large on huge jobs.
+        "previews": job.previews[-6:],
         "downloads": {kind: f"/download/{job.id}/{name}" for kind, name in job.downloads.items()},
         "decision": job.pending_decision,
         "error": job.error,
@@ -235,7 +238,7 @@ def lineart_preview(job_id: str, name: str):
     return send_from_directory(WORK / job.work_name / "enhanced-lineart", name)
 
 
-@app.get("/download/<job_id>/<name>")
+@app.get("/download/<job_id>/<path:name>")
 def download(job_id: str, name: str):
     job = manager.jobs.get(job_id)
     if not job:

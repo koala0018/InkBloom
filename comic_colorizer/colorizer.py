@@ -31,6 +31,7 @@ class ColorSettings:
     cobra_color_strength: float = 0.96
     cobra_consistency: bool = True
     cobra_consistency_strength: float = 0.72
+    cobra_reference_confirmation: bool = False
     lineart_enhance: bool = False
     lineart_backend: str = "safe"
     lineart_strength: float = 0.65

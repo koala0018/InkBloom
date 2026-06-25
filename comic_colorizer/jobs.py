@@ -10,7 +10,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .colorizer import ColorSettings, make_colorizer
-from .documents import collect_inputs, export_results, result_name, safe_component
+from .documents import (
+    collect_inputs,
+    export_completed_documents,
+    finalize_document_exports,
+    result_name,
+    safe_component,
+)
 from .lineart_enhancer import enhance_pages
 from .paths import OUTPUT, WORK
 
@@ -85,7 +91,14 @@ class Job:
         if self.cancel_requested:
             raise JobCancelled("任务已取消")
 
-    def ask_reference(self, page_index: int, candidates: list[int], previous: int | None) -> dict:
+    def ask_reference(
+        self,
+        page_index: int,
+        candidates: list[int],
+        previous: int | None,
+        group_label: str,
+        group_pages: int,
+    ) -> dict:
         options = [
             {
                 "id": f"reference:{index}",
@@ -109,8 +122,11 @@ class Job:
             self.pending_decision = {
                 "kind": "reference",
                 "page": page_index + 1,
-                "title": f"第 {page_index + 1} 页参考图匹配不明确",
-                "message": "请对照黑白底稿选择最接近人物、服装或场景的彩色样例，也可以补充新参考图。",
+                "title": f"为“{group_label}”选择主参考图",
+                "message": (
+                    f"这是该连续色调组的第一张底稿。你的选择将作为后续 {group_pages} 页的主画风，"
+                    "请对照人物、服装和场景选择；也可以补充新的参考图。"
+                ),
                 "source": f"/source-preview/{self.id}/{page_index}",
                 "options": options,
             }
@@ -140,7 +156,7 @@ class JobManager:
     def create(self, uploads: list[Path], references: list[Path], title: str, settings: ColorSettings) -> Job:
         self.clean_old(keep=5)
         job_id = uuid.uuid4().hex[:10]
-        work_name = f"{safe_component(title, '漫画')}_{job_id}"
+        work_name = f"{safe_component(title, '漫画', max_length=80)}_{job_id}"
         job = Job(id=job_id, title=title, work_name=work_name)
         job.log("任务已创建，文件仅在本机处理")
         job.log(f"过程文件：{WORK / work_name}；最终成品：{OUTPUT / work_name}")
@@ -188,7 +204,10 @@ class JobManager:
         job_dir = WORK / job.work_name
         page_dir = job_dir / "pages"
         colored_dir = job_dir / "colored"
+        document_dir = job_dir / "已上色文档"
+        out_dir = OUTPUT / job.work_name
         colored_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=True)
         original_references = list(references)
         try:
             reference_dir = job_dir / "references"
@@ -203,7 +222,7 @@ class JobManager:
             references = local_references
             job.reference_paths = references
             job.update_stage("extract", 0, 1, "正在展开漫画文档")
-            pages, source_kind = collect_inputs(
+            pages, source_kind, manifest = collect_inputs(
                 uploads,
                 page_dir,
                 on_warning=lambda message: job.log(
@@ -217,6 +236,7 @@ class JobManager:
             job.raise_if_cancelled()
             job.total = len(pages)
             job.source_pages = pages
+            source_pages = list(pages)
             job.update_stage("extract", 1, 1, f"文档拆页完成，共 {job.total} 页")
             index_path = job_dir / "页面索引.csv"
             with index_path.open("w", encoding="utf-8-sig", newline="") as index_file:
@@ -245,13 +265,25 @@ class JobManager:
             if hasattr(engine, "prepare_reference_plan"):
                 engine.prepare_reference_plan(
                     pages,
-                    lambda page_index, candidates, previous: job.ask_reference(
-                        page_index, candidates, previous
+                    lambda page_index, candidates, previous, group_label, group_pages: job.ask_reference(
+                        page_index, candidates, previous, group_label, group_pages
                     ),
                     job.reference_paths,
                 )
             job.raise_if_cancelled()
             results: list[Path] = []
+            page_results: dict[Path, Path] = {}
+
+            def flush_documents() -> None:
+                try:
+                    export_completed_documents(
+                        page_results,
+                        manifest,
+                        [document_dir, out_dir],
+                        on_export=lambda message: job.log(message, "success"),
+                    )
+                except Exception as exc:
+                    job.log(f"来源文档增量导出失败，将在任务结束时重试：{exc}", "error")
 
             if hasattr(engine, "colorize_batch"):
                 previewed: set[int] = set()
@@ -261,11 +293,17 @@ class JobManager:
                     job.update_stage(stage, current, total, message)
                     if stage == "layers" and current > 0 and current not in previewed:
                         target = colored_dir / result_name(pages[current - 1], current)
+                        page_results[source_pages[current - 1]] = target
+                        flush_documents()
                         job.previews.append(f"/preview/{job.id}/{target.name}")
                         job.progress = current
                         previewed.add(current)
 
                 results = engine.colorize_batch(pages, colored_dir, on_stage)
+                for index, target in enumerate(results):
+                    if index < len(source_pages):
+                        page_results[source_pages[index]] = target
+                flush_documents()
             else:
                 job.update_stage("engine", 1, 1, "CPU 兼容引擎已加载")
                 for index, page in enumerate(pages, 1):
@@ -274,16 +312,23 @@ class JobManager:
                     target = colored_dir / result_name(page, index)
                     engine.colorize(page, target)
                     results.append(target)
+                    page_results[source_pages[index - 1]] = target
+                    flush_documents()
                     job.previews.append(f"/preview/{job.id}/{target.name}")
                     job.progress = index
                     job.update_stage("stage1", index, len(pages), f"已完成 {index}/{len(pages)}")
                 for key in ("reference", "lineart", "stage2", "layers"):
                     job.update_stage(key, 1, 1, "兼容模式不使用此阶段")
 
-            job.update_stage("export", 0, 1, "正在生成 PDF、CBZ 与分层压缩包")
+            job.update_stage("export", 0, 1, "正在按原始文件名和格式生成成品")
             job.raise_if_cancelled()
-            out_dir = OUTPUT / job.work_name
-            job.downloads = export_results(results, out_dir, job.title, source_kind)
+            job.downloads = finalize_document_exports(
+                page_results,
+                manifest,
+                document_dir,
+                out_dir,
+                job.title,
+            )
             layer_name = self._pack_layers(job_dir / "style2paints-layers", out_dir, job.title)
             if layer_name:
                 job.downloads["layers"] = layer_name

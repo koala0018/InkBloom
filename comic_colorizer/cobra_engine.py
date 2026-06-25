@@ -31,21 +31,18 @@ class CobraColorizer:
         self.python = self.root / ".venv" / "Scripts" / "python.exe"
         self.worker = self.root / "inkbloom_worker.py"
         self.log_path = ROOT / "InkBloom-Cobra.log"
-        reference_chroma = []
-        for path in self.references:
-            rgb = np.asarray(Image.open(path).convert("RGB").resize((256, 256)), dtype=np.float32) / 255.0
-            lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
-            chroma = lab[..., 1:].reshape(-1, 2)
-            colorful = chroma[np.linalg.norm(chroma, axis=1) > 3.0]
-            if len(colorful):
-                reference_chroma.append(colorful)
-        palette = np.concatenate(reference_chroma) if reference_chroma else np.zeros((1, 2), np.float32)
+        self.reference_palettes = [self._palette_stats(path) for path in self.references]
+        palette = np.vstack([mean for mean, _std in self.reference_palettes])
         self.reference_mean = np.median(palette, axis=0)
-        self.reference_std = np.maximum(np.std(palette, axis=0), 8.0)
+        self.reference_std = np.maximum(
+            np.median(np.vstack([std for _mean, std in self.reference_palettes]), axis=0),
+            8.0,
+        )
         self.previous_group: Path | None = None
         self.previous_mean: np.ndarray | None = None
         self.previous_std: np.ndarray | None = None
         self.reference_plan: list[list[int]] = []
+        self.group_reference: dict[Path, int] = {}
 
     @classmethod
     def available(cls) -> bool:
@@ -70,51 +67,66 @@ class CobraColorizer:
         thumbnail = (thumbnail - thumbnail.mean()) / max(float(thumbnail.std()), 1.0)
         return np.r_[histogram * 2.0, edges.mean(), thumbnail.ravel() * 0.035]
 
+    @staticmethod
+    def _palette_stats(path: Path) -> tuple[np.ndarray, np.ndarray]:
+        rgb = np.asarray(
+            Image.open(path).convert("RGB").resize((256, 256)),
+            dtype=np.float32,
+        ) / 255.0
+        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+        chroma = lab[..., 1:].reshape(-1, 2)
+        colorful = chroma[np.linalg.norm(chroma, axis=1) > 3.0]
+        if not len(colorful):
+            colorful = np.zeros((1, 2), np.float32)
+        return np.median(colorful, axis=0), np.maximum(np.std(colorful, axis=0), 8.0)
+
     def prepare_reference_plan(self, pages, ask, reference_paths) -> None:
         if len(reference_paths) <= 1:
             self.reference_plan = [[0] for _ in pages]
+            self.group_reference = {page.parent: 0 for page in pages}
             return
         reference_features = [self._match_feature(path) for path in reference_paths]
         previous_choice: int | None = None
-        previous_page_feature: np.ndarray | None = None
-        previous_group: Path | None = None
         self.reference_plan = []
-        for page_index, page in enumerate(pages):
-            page_feature = self._match_feature(page)
+        self.group_reference = {}
+        page_index = 0
+        while page_index < len(pages):
+            group = pages[page_index].parent
+            group_end = page_index + 1
+            while group_end < len(pages) and pages[group_end].parent == group:
+                group_end += 1
+            group_pages = group_end - page_index
+            page_feature = self._match_feature(pages[page_index])
             distances = np.array(
                 [np.mean((page_feature - feature) ** 2) for feature in reference_features]
             )
             ranked = np.argsort(distances)
             best = int(ranked[0])
-            margin = float(distances[ranked[1]] - distances[ranked[0]])
-            scene_change = (
-                previous_page_feature is None
-                or page.parent != previous_group
-                or float(np.mean((page_feature - previous_page_feature) ** 2)) > 0.055
-            )
-            ambiguous = margin < 0.012
-            if previous_choice is not None and not scene_change:
-                choice = previous_choice
-            elif ambiguous:
-                result = ask(page_index, [int(item) for item in ranked[:4]], previous_choice)
+            if self.settings.cobra_reference_confirmation:
+                result = ask(
+                    page_index,
+                    [int(item) for item in ranked[:4]],
+                    previous_choice,
+                    group.name,
+                    group_pages,
+                )
                 if result.get("new_reference"):
                     new_path = Path(result["new_reference"]).resolve()
                     self.references.append(new_path)
                     reference_paths.append(new_path)
                     reference_features.append(self._match_feature(new_path))
+                    self.reference_palettes.append(self._palette_stats(new_path))
                     choice = len(reference_features) - 1
                 else:
                     choice = int(result.get("reference", best))
             else:
                 choice = best
-            # The selected image is intentionally first and repeated once.
-            # Cobra therefore treats the user's decision as the dominant
-            # reference while retaining one secondary structural candidate.
             secondary = next((int(item) for item in ranked if int(item) != choice), choice)
-            self.reference_plan.append([choice, choice, secondary])
+            plan = [choice, choice, secondary]
+            self.reference_plan.extend([plan] * group_pages)
+            self.group_reference[group] = choice
             previous_choice = choice
-            previous_page_feature = page_feature
-            previous_group = page.parent
+            page_index = group_end
 
     def _finish_image(self, source: Path, generated: Path, destination: Path, settings: ColorSettings) -> None:
         original = np.asarray(Image.open(source).convert("RGB"), dtype=np.uint8)
@@ -163,11 +175,14 @@ class CobraColorizer:
                 page_mean = np.median(page_values, axis=0)
                 page_std = np.maximum(np.std(page_values, axis=0), 8.0)
                 group = source.parent
-                continuity_mean = self.reference_mean
-                continuity_std = self.reference_std
+                selected = self.group_reference.get(source.parent)
+                if selected is not None and selected < len(self.reference_palettes):
+                    continuity_mean, continuity_std = self.reference_palettes[selected]
+                else:
+                    continuity_mean, continuity_std = self.reference_mean, self.reference_std
                 if self.previous_group == group and self.previous_mean is not None:
-                    continuity_mean = self.reference_mean * 0.78 + self.previous_mean * 0.22
-                    continuity_std = self.reference_std * 0.82 + self.previous_std * 0.18
+                    continuity_mean = continuity_mean * 0.78 + self.previous_mean * 0.22
+                    continuity_std = continuity_std * 0.82 + self.previous_std * 0.18
                 normalized = (chroma - page_mean) / page_std
                 anchored = normalized * continuity_std + continuity_mean
                 chroma = chroma * (1.0 - weight * 0.42) + anchored * (weight * 0.42)

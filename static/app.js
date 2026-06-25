@@ -8,6 +8,7 @@ const stageList = document.querySelector('#stage-list');
 const jobLog = document.querySelector('#job-log');
 let currentJobId = null;
 let renderedDecisionKey = '';
+let pollFailures = 0;
 
 const helpText = {
   'care-stage': ['原生生成阶段', 'Stage I 先根据线稿、参考图和颜色提示产生固有色；Stage II 再以 Stage I 的平涂结果作为条件进行精细渲染。成品通常选择 Stage II，后期绘画底稿可选择 Stage I。'],
@@ -159,6 +160,7 @@ async function poll(id) {
     const response = await fetch(`/api/jobs/${id}`);
     const job = await readJson(response);
     if (!response.ok) throw new Error(job.error || `接口返回 ${response.status}`);
+    pollFailures = 0;
     const percent = job.overall_progress || 0;
     document.querySelector('#progress-message').textContent = job.message;
     document.querySelector('#progress-number').textContent = `${percent}%`;
@@ -194,7 +196,21 @@ async function poll(id) {
     }
     if (job.status === 'error') throw new Error(job.error || '处理失败');
     setTimeout(() => poll(id), 700);
-  } catch (error) { showError(error.message); }
+  } catch (error) {
+    // A large PDF render can briefly delay Flask's response. The backend job
+    // continues independently, so keep reconnecting instead of presenting a
+    // false task failure and abandoning status polling.
+    if (error instanceof TypeError || /Failed to fetch|NetworkError|Load failed/i.test(error.message)) {
+      pollFailures += 1;
+      document.querySelector('#progress-message').textContent =
+        `本地服务暂时繁忙，正在自动重连（第 ${pollFailures} 次）`;
+      document.querySelector('#progress-number').textContent = '重连中';
+      const delay = Math.min(5000, 900 + pollFailures * 350);
+      setTimeout(() => poll(id), delay);
+      return;
+    }
+    showError(error.message);
+  }
 }
 
 async function readJson(response) {
