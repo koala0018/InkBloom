@@ -28,10 +28,11 @@ class ColorSettings:
     cobra_top_k: int = 4
     cobra_seed: int = 1
     cobra_preserve_lines: float = 0.88
-    cobra_color_strength: float = 0.96
+    cobra_color_strength: float = 1.05
     cobra_consistency: bool = True
     cobra_consistency_strength: float = 0.72
     cobra_reference_confirmation: bool = False
+    cobra_auto_color_reference: bool = True
     lineart_enhance: bool = False
     lineart_backend: str = "safe"
     lineart_strength: float = 0.65

@@ -9,6 +9,7 @@ import csv
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .auto_references import collect_auto_references
 from .colorizer import ColorSettings, make_colorizer
 from .documents import (
     collect_inputs,
@@ -253,6 +254,28 @@ class JobManager:
             job.log(f"页面归类索引已保存：{index_path}")
             if job.total > 250:
                 job.log(f"超大任务将按每 250 页自动分卷导出，共约 {(job.total + 249) // 250} 卷")
+            auto_reference_map = {}
+            if settings.engine == "cobra" and settings.cobra_auto_color_reference:
+                job.update_stage("reference", 0, 1, "正在识别本话官方彩色页作为参考图")
+                auto_references, auto_reference_map = collect_auto_references(
+                    pages,
+                    reference_dir,
+                    len(references),
+                    on_progress=lambda current, total, message: job.update_stage(
+                        "reference",
+                        current,
+                        total,
+                        message,
+                    ),
+                )
+                if auto_references:
+                    references.extend(auto_references)
+                    job.reference_paths = references
+                    job.log(
+                        f"已自动识别 {len(auto_references)} 张彩色页，将作为所在话/段落的优先参考图"
+                    )
+                else:
+                    job.log("未检测到可靠的本话彩色页，继续使用上传的样例图")
             if settings.lineart_enhance:
                 enhanced_dir = job_dir / "enhanced-lineart"
                 pages = enhance_pages(pages, enhanced_dir, references, settings, job.update_stage)
@@ -262,6 +285,8 @@ class JobManager:
             else:
                 job.update_stage("redraw", 1, 1, "未启用，保留原始线稿")
             engine = make_colorizer(references, settings)
+            if hasattr(engine, "set_auto_references"):
+                engine.set_auto_references(auto_reference_map)
             if hasattr(engine, "prepare_reference_plan"):
                 engine.prepare_reference_plan(
                     pages,

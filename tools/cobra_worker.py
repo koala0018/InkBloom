@@ -35,7 +35,7 @@ def main() -> None:
     # means 48 reference tensors and causes WDDM to spill CUDA allocations
     # into shared system memory. Keep a conservative automatic ceiling.
     total_vram_gb = cobra.torch.cuda.get_device_properties(0).total_memory / 1024**3
-    safe_top_k = 4 if total_vram_gb < 20 else 8 if total_vram_gb < 32 else 20
+    safe_top_k = 5 if total_vram_gb < 20 else 8 if total_vram_gb < 32 else 20
     top_k = min(int(config["top_k"]), safe_top_k, max(1, len(references) * 5))
     emit(
         "memory",

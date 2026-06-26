@@ -32,6 +32,9 @@ class CobraColorizer:
         self.worker = self.root / "inkbloom_worker.py"
         self.log_path = ROOT / "InkBloom-Cobra.log"
         self.reference_palettes = [self._palette_stats(path) for path in self.references]
+        self.reference_chroma_levels = [
+            self._chroma_level(path) for path in self.references
+        ]
         palette = np.vstack([mean for mean, _std in self.reference_palettes])
         self.reference_mean = np.median(palette, axis=0)
         self.reference_std = np.maximum(
@@ -43,6 +46,8 @@ class CobraColorizer:
         self.previous_std: np.ndarray | None = None
         self.reference_plan: list[list[int]] = []
         self.group_reference: dict[Path, int] = {}
+        self.page_reference: dict[Path, int] = {}
+        self.auto_references_by_group: dict[Path, list] = {}
 
     @classmethod
     def available(cls) -> bool:
@@ -80,15 +85,26 @@ class CobraColorizer:
             colorful = np.zeros((1, 2), np.float32)
         return np.median(colorful, axis=0), np.maximum(np.std(colorful, axis=0), 8.0)
 
+    @staticmethod
+    def _chroma_level(path: Path) -> float:
+        rgb = np.asarray(
+            Image.open(path).convert("RGB").resize((256, 256)),
+            dtype=np.float32,
+        ) / 255.0
+        lab = cv2.cvtColor(rgb, cv2.COLOR_RGB2LAB)
+        norms = np.linalg.norm(lab[..., 1:].reshape(-1, 2), axis=1)
+        colorful = norms[norms > 5.0]
+        return float(np.median(colorful)) if len(colorful) else 8.0
+
+    def set_auto_references(self, auto_references_by_group: dict[Path, list]) -> None:
+        self.auto_references_by_group = auto_references_by_group or {}
+
     def prepare_reference_plan(self, pages, ask, reference_paths) -> None:
-        if len(reference_paths) <= 1:
-            self.reference_plan = [[0] for _ in pages]
-            self.group_reference = {page.parent: 0 for page in pages}
-            return
         reference_features = [self._match_feature(path) for path in reference_paths]
         previous_choice: int | None = None
         self.reference_plan = []
         self.group_reference = {}
+        self.page_reference = {}
         page_index = 0
         while page_index < len(pages):
             group = pages[page_index].parent
@@ -96,35 +112,91 @@ class CobraColorizer:
             while group_end < len(pages) and pages[group_end].parent == group:
                 group_end += 1
             group_pages = group_end - page_index
-            page_feature = self._match_feature(pages[page_index])
-            distances = np.array(
-                [np.mean((page_feature - feature) ** 2) for feature in reference_features]
+            group_page_list = pages[page_index:group_end]
+            local_by_page = {page.resolve(): offset for offset, page in enumerate(group_page_list)}
+            auto_refs = sorted(
+                (
+                    item
+                    for item in self.auto_references_by_group.get(group, [])
+                    if getattr(item, "page", None) in local_by_page
+                ),
+                key=lambda item: local_by_page[item.page],
             )
-            ranked = np.argsort(distances)
-            best = int(ranked[0])
-            if self.settings.cobra_reference_confirmation:
-                result = ask(
-                    page_index,
-                    [int(item) for item in ranked[:4]],
-                    previous_choice,
-                    group.name,
-                    group_pages,
+            auto_by_start = {local_by_page[item.page]: item for item in auto_refs}
+            segment_starts = sorted({0, *auto_by_start.keys(), group_pages})
+            for segment_index, segment_start in enumerate(segment_starts[:-1]):
+                segment_end = segment_starts[segment_index + 1]
+                active_auto = next(
+                    (
+                        auto_by_start[start]
+                        for start in sorted(auto_by_start, reverse=True)
+                        if start <= segment_start
+                    ),
+                    None,
                 )
-                if result.get("new_reference"):
-                    new_path = Path(result["new_reference"]).resolve()
-                    self.references.append(new_path)
-                    reference_paths.append(new_path)
-                    reference_features.append(self._match_feature(new_path))
-                    self.reference_palettes.append(self._palette_stats(new_path))
-                    choice = len(reference_features) - 1
+                if active_auto is not None:
+                    choice = int(active_auto.reference_index)
+                    probe_page = group_page_list[segment_start]
+                    page_feature = self._match_feature(probe_page)
+                    distances = np.array(
+                        [np.mean((page_feature - feature) ** 2) for feature in reference_features]
+                    )
+                    ranked = [choice] + [
+                        int(item) for item in np.argsort(distances) if int(item) != choice
+                    ]
+                    if self.settings.cobra_reference_confirmation:
+                        result = ask(
+                            page_index + segment_start,
+                            ranked[:4],
+                            previous_choice,
+                            group.name,
+                            segment_end - segment_start,
+                        )
+                        if result.get("new_reference"):
+                            new_path = Path(result["new_reference"]).resolve()
+                            self.references.append(new_path)
+                            reference_paths.append(new_path)
+                            reference_features.append(self._match_feature(new_path))
+                            self.reference_palettes.append(self._palette_stats(new_path))
+                            self.reference_chroma_levels.append(self._chroma_level(new_path))
+                            choice = len(reference_features) - 1
+                        else:
+                            choice = int(result.get("reference", choice))
+                    secondary = next((int(item) for item in ranked if int(item) != choice), choice)
                 else:
-                    choice = int(result.get("reference", best))
-            else:
-                choice = best
-            secondary = next((int(item) for item in ranked if int(item) != choice), choice)
-            plan = [choice, choice, secondary]
-            self.reference_plan.extend([plan] * group_pages)
-            self.group_reference[group] = choice
+                    page_feature = self._match_feature(group_page_list[segment_start])
+                    distances = np.array(
+                        [np.mean((page_feature - feature) ** 2) for feature in reference_features]
+                    )
+                    ranked = np.argsort(distances)
+                    best = int(ranked[0])
+                    if self.settings.cobra_reference_confirmation:
+                        result = ask(
+                            page_index + segment_start,
+                            [int(item) for item in ranked[:4]],
+                            previous_choice,
+                            group.name,
+                            segment_end - segment_start,
+                        )
+                        if result.get("new_reference"):
+                            new_path = Path(result["new_reference"]).resolve()
+                            self.references.append(new_path)
+                            reference_paths.append(new_path)
+                            reference_features.append(self._match_feature(new_path))
+                            self.reference_palettes.append(self._palette_stats(new_path))
+                            self.reference_chroma_levels.append(self._chroma_level(new_path))
+                            choice = len(reference_features) - 1
+                        else:
+                            choice = int(result.get("reference", best))
+                    else:
+                        choice = best
+                    secondary = next((int(item) for item in ranked if int(item) != choice), choice)
+                plan = [choice, choice, secondary]
+                self.reference_plan.extend([plan] * (segment_end - segment_start))
+                for page in group_page_list[segment_start:segment_end]:
+                    self.page_reference[page.resolve()] = choice
+                self.group_reference[group] = choice
+                previous_choice = choice
             previous_choice = choice
             page_index = group_end
 
@@ -144,10 +216,11 @@ class CobraColorizer:
         result_f = result / 255.0
         original_lab = cv2.cvtColor(original_f, cv2.COLOR_RGB2LAB)
         result_lab = cv2.cvtColor(result_f, cv2.COLOR_RGB2LAB)
-        color_strength = float(np.clip(settings.cobra_color_strength, 0.0, 1.0))
+        color_strength = float(np.clip(settings.cobra_color_strength, 0.55, 1.20))
         result_lab[..., 0] = original_lab[..., 0] * 0.62 + result_lab[..., 0] * 0.38
         chroma = result_lab[..., 1:] * color_strength
-        guide = cv2.cvtColor(original, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+        gray = cv2.cvtColor(original, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+        guide = gray
         filtered = np.stack(
             [
                 cv2.ximgproc.guidedFilter(
@@ -162,41 +235,94 @@ class CobraColorizer:
         )
         # Remove small chroma speckles in screentones while keeping character
         # boundaries and deliberate local colors.
-        chroma = chroma * 0.28 + filtered * 0.72
+        chroma = chroma * 0.42 + filtered * 0.58
         if settings.cobra_consistency:
-            # Cobra normally chooses reference patches independently for each
-            # page. Anchor every page to the uploaded sample palette and use
-            # the preceding page only as a weak continuity cue inside the same
-            # source/chapter folder.
+            # Stabilize color intensity only. Never translate LAB a/b means:
+            # that would apply a warm/cool veil to unrelated regions.
             weight = float(np.clip(settings.cobra_consistency_strength, 0.0, 1.0))
             valid = np.linalg.norm(chroma, axis=2) > 3.0
             if np.any(valid):
-                page_values = chroma[valid]
-                page_mean = np.median(page_values, axis=0)
-                page_std = np.maximum(np.std(page_values, axis=0), 8.0)
                 group = source.parent
-                selected = self.group_reference.get(source.parent)
-                if selected is not None and selected < len(self.reference_palettes):
-                    continuity_mean, continuity_std = self.reference_palettes[selected]
+                selected = self.page_reference.get(source.resolve(), self.group_reference.get(source.parent))
+                if selected is not None and selected < len(self.reference_chroma_levels):
+                    target_level = self.reference_chroma_levels[selected]
                 else:
-                    continuity_mean, continuity_std = self.reference_mean, self.reference_std
-                if self.previous_group == group and self.previous_mean is not None:
-                    continuity_mean = continuity_mean * 0.78 + self.previous_mean * 0.22
-                    continuity_std = continuity_std * 0.82 + self.previous_std * 0.18
-                normalized = (chroma - page_mean) / page_std
-                anchored = normalized * continuity_std + continuity_mean
-                chroma = chroma * (1.0 - weight * 0.42) + anchored * (weight * 0.42)
-                final_values = chroma[valid]
+                    target_level = float(np.median(np.linalg.norm(chroma[valid], axis=1)))
+                current_level = max(
+                    float(np.median(np.linalg.norm(chroma[valid], axis=1))),
+                    1.0,
+                )
+                scale = float(np.clip(target_level / current_level, 0.92, 1.10))
+                chroma *= 1.0 + (scale - 1.0) * weight * 0.40
                 self.previous_group = group
-                self.previous_mean = np.median(final_values, axis=0)
-                self.previous_std = np.maximum(np.std(final_values, axis=0), 8.0)
+        # Cobra can sometimes spread a low-confidence peach/orange wash across
+        # bright manga paper, walls, skies, and empty panel backgrounds. Do not
+        # solve that by lowering the whole image saturation: skin and clothes
+        # would become pale again. Instead, only damp warm, low-detail chroma in
+        # large bright regions away from ink lines while keeping deliberate local
+        # colors near characters and props.
+        ink_core = (gray < 0.70).astype(np.uint8)
+        distance_from_ink = cv2.distanceTransform(1 - ink_core, cv2.DIST_L2, 3)
+        light_area = np.clip((gray - 0.78) / 0.20, 0.0, 1.0)
+        far_from_lines = np.clip((distance_from_ink - 3.0) / 14.0, 0.0, 1.0)
+        chroma_amount = np.linalg.norm(chroma, axis=2)
+        low_confidence_color = np.clip((70.0 - chroma_amount) / 58.0, 0.0, 1.0)
+        red_or_pink_bias = np.clip(chroma[..., 0] / 16.0, 0.0, 1.0)
+        yellow_bias = np.clip(chroma[..., 1] / 22.0, 0.0, 1.0)
+        warm_bias = np.maximum(red_or_pink_bias, yellow_bias * 0.75)
+        warm_wash = (
+            light_area * far_from_lines * low_confidence_color * warm_bias
+        )[..., None]
+        warm_wash = np.clip(warm_wash * 2.15, 0.0, 1.0)
+        if np.any(warm_wash > 0.01):
+            chroma *= 1.0 - warm_wash * 0.90
+        strong_warm_fill = (
+            light_area
+            * far_from_lines
+            * warm_bias
+            * np.clip((chroma_amount - 38.0) / 52.0, 0.0, 1.0)
+        )[..., None]
+        strong_warm_fill = np.clip(strong_warm_fill * 1.35, 0.0, 1.0)
+        if np.any(strong_warm_fill > 0.01):
+            chroma *= 1.0 - strong_warm_fill * 0.58
+        # Speech balloons and caption boxes should usually stay white. Cobra
+        # often treats them as generic bright regions and paints their interiors
+        # yellow/orange, which hurts readability and makes the page feel dirty.
+        # Use the original line art to find enclosed paper-white components and
+        # neutralize their chroma while preserving the black text/outline later.
+        bubble_mask = np.zeros_like(gray, dtype=np.float32)
+        bright_inside = (gray > 0.925).astype(np.uint8)
+        component_count, component_labels, stats, _centroids = cv2.connectedComponentsWithStats(
+            bright_inside,
+            connectivity=8,
+        )
+        page_area = float(gray.shape[0] * gray.shape[1])
+        for component in range(1, component_count):
+            x, y, width, height, area = stats[component]
+            if area < page_area * 0.0012 or area > page_area * 0.34:
+                continue
+            if x <= 1 or y <= 1 or x + width >= gray.shape[1] - 2 or y + height >= gray.shape[0] - 2:
+                continue
+            fill_ratio = float(area) / max(float(width * height), 1.0)
+            if fill_ratio < 0.18:
+                continue
+            bubble_mask[component_labels == component] = 1.0
+        if np.any(bubble_mask > 0.0):
+            kernel_size = max(3, int(round(max(gray.shape[:2]) / 700)) | 1)
+            bubble_mask = cv2.dilate(
+                bubble_mask,
+                np.ones((kernel_size, kernel_size), np.uint8),
+                iterations=1,
+            )
+            bubble_mask = cv2.GaussianBlur(bubble_mask, (kernel_size, kernel_size), 0)
+            bubble_mask = (bubble_mask * np.clip((gray - 0.70) / 0.22, 0.0, 1.0))[..., None]
+            chroma *= 1.0 - bubble_mask * 0.92
         chroma_norm = np.linalg.norm(chroma, axis=2, keepdims=True)
-        soft_limit = 62.0
+        soft_limit = 70.0
         chroma *= np.tanh(chroma_norm / soft_limit) * soft_limit / np.maximum(chroma_norm, 1e-5)
         result_lab[..., 1:] = chroma
         clean = np.clip(cv2.cvtColor(result_lab, cv2.COLOR_LAB2RGB), 0.0, 1.0)
 
-        gray = cv2.cvtColor(original, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
         ink = np.clip((0.30 - gray) / 0.25, 0.0, 1.0)[..., None]
         preserve = float(np.clip(settings.cobra_preserve_lines, 0.0, 1.0))
         mixed = clean * (1.0 - ink * preserve) + original_f * (ink * preserve)
@@ -297,7 +423,6 @@ class CobraColorizer:
                             raise RuntimeError(f"Cobra 缺少第 {current} 页输出")
                         destination = output_dir / result_name(pages[current - 1], current)
                         self._finish_image(pages[current - 1], raw, destination, self.settings)
-                        raw.unlink(missing_ok=True)
                         results.append(destination)
                         completed.add(current)
                         callback("stage1", current, total, message)
@@ -337,7 +462,6 @@ class CobraColorizer:
                 raise RuntimeError(f"Cobra 缺少第 {index} 页输出")
             destination = output_dir / result_name(page, index)
             self._finish_image(page, raw, destination, self.settings)
-            raw.unlink(missing_ok=True)
             results.append(destination)
             if callback:
                 callback("layers", index, len(pages), f"第 {index} 页已保存高清结果")
