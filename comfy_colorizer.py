@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Callable
 
@@ -137,14 +137,46 @@ def run_parallel(pages: list[Path], out_dir: Path, positive: str, negative: str,
     if len(online) < 2:
         raise RuntimeError("需要两个 ComfyUI 服务同时在线（2080 Ti:8188、5060 Ti:8189），当前在线服务不足两个")
     out_dir.mkdir(parents=True, exist_ok=True)
-    def one(index: int, page: Path) -> tuple[int, str]:
-        service = online[index % len(online)]
-        target = out_dir / f"{index + 1:05d}_{page.stem}_colored.png"
+    pending_dir = out_dir.parent / ".comfy-pending"
+    pending_dir.mkdir(parents=True, exist_ok=True)
+
+    def one(index: int, page: Path, service: ComfyService) -> tuple[int, str]:
+        filename = f"{index + 1:05d}_{page.stem}_colored.png"
+        target = pending_dir / filename
         service.run(page, positive, negative, width, height, target)
         return index, service.name
+
+    ready: dict[int, tuple[str, Path]] = {}
+    next_assign = 0
+    next_publish = 0
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="comfy") as pool:
-        futures = [pool.submit(one, index, page) for index, page in enumerate(pages)]
-        for done, future in enumerate(as_completed(futures), 1):
-            index, service_name = future.result()
-            if on_page:
-                on_page(done, len(pages), f"第 {index + 1} 页完成（{service_name}）")
+        running: dict[object, tuple[int, ComfyService]] = {}
+        for service in online:
+            if next_assign >= len(pages):
+                break
+            future = pool.submit(one, next_assign, pages[next_assign], service)
+            running[future] = (next_assign, service)
+            next_assign += 1
+        while running:
+            finished, _ = wait(tuple(running), return_when=FIRST_COMPLETED)
+            for future in finished:
+                index, service = running.pop(future)
+                completed_index, service_name = future.result()
+                filename = f"{completed_index + 1:05d}_{pages[completed_index].stem}_colored.png"
+                ready[completed_index] = (service_name, pending_dir / filename)
+                # Reuse the service that just became free; never queue a
+                # second job behind it. This keeps both GPUs busy dynamically.
+                if next_assign < len(pages):
+                    next_future = pool.submit(one, next_assign, pages[next_assign], service)
+                    running[next_future] = (next_assign, service)
+                    next_assign += 1
+                while next_publish in ready:
+                    ready_service, pending_file = ready.pop(next_publish)
+                    pending_file.replace(out_dir / pending_file.name)
+                    next_publish += 1
+                    if on_page:
+                        on_page(next_publish, len(pages), f"第 {next_publish} 页完成（{ready_service}）")
+    try:
+        pending_dir.rmdir()
+    except OSError:
+        pass
