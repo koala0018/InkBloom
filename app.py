@@ -69,8 +69,21 @@ def create_job():
     return jsonify({"job_id": job.id})
 
 
+@app.get("/api/jobs/latest")
+def latest_job():
+    if not manager.jobs:
+        return jsonify({"job_id": None})
+    job = next(reversed(manager.jobs.values()))
+    return jsonify({"job_id": job.id})
+
+
 @app.get("/api/jobs/<job_id>")
 def job_status(job_id: str):
+    if job_id == "latest":
+        if not manager.jobs:
+            return jsonify({"job_id": None})
+        job = next(reversed(manager.jobs.values()))
+        return jsonify({"job_id": job.id})
     job = manager.jobs.get(job_id)
     if not job:
         return jsonify({"error": "任务不存在"}), 404

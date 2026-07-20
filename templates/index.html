@@ -8,8 +8,18 @@
 <h2>任务进度</h2><div id="status" class="status">尚未提交任务</div><h3>运行日志</h3><pre id="logs" class="logs">等待任务…</pre><div id="files"></div>
 <script>
 const services=document.querySelector('#services'),status=document.querySelector('#status'),logs=document.querySelector('#logs'),files=document.querySelector('#files');
+let activeJobId=localStorage.getItem('comfyinkbloom.activeJobId');
+const nativeFetch=window.fetch.bind(window);
+window.fetch=async function(input, init){
+  const response=await nativeFetch(input, init);
+  if(String(input)==='/api/jobs' && init && init.method==='POST'){
+    response.clone().json().then(data=>{if(data.job_id){activeJobId=data.job_id;localStorage.setItem('comfyinkbloom.activeJobId',activeJobId);}}).catch(()=>{});
+  }
+  return response;
+};
 async function check(){try{const d=await (await fetch('/api/services')).json();services.textContent='工作流：'+d.workflow+'\n'+d.services.map(x=>x.name+' '+(x.online?'在线':'离线')+' '+(x.device||x.error||'')).join('\n')}catch(e){services.textContent='服务检查失败：'+e}}
 check();
 document.querySelector('#form').addEventListener('submit',async e=>{e.preventDefault();status.textContent='正在创建任务…';const r=await fetch('/api/jobs',{method:'POST',body:new FormData(e.target)});const d=await r.json();if(!r.ok){status.textContent=d.error;return}poll(d.job_id)});
-async function poll(id){const r=await fetch('/api/jobs/'+id);const d=await r.json();if(!r.ok){status.textContent=d.error;return}status.textContent=`${d.status}  ${d.progress}/${d.total}（${d.percent||0}%）\n${d.message}${d.error?'\n错误：'+d.error:''}\n输出目录：${d.colored_dir}`;logs.textContent=(d.logs||[]).join('\n');logs.scrollTop=logs.scrollHeight;if(d.status==='done'){files.innerHTML='<p>输出已完成：'+d.colored_dir+'</p>'}else if(d.status!=='error')setTimeout(()=>poll(id),1000)}
+async function poll(id){const r=await fetch('/api/jobs/'+id);const d=await r.json();if(!r.ok){localStorage.removeItem('comfyinkbloom.activeJobId');activeJobId=null;const latest=await (await fetch('/api/jobs/latest')).json();if(latest.job_id){activeJobId=latest.job_id;localStorage.setItem('comfyinkbloom.activeJobId',activeJobId);return poll(activeJobId)}status.textContent=d.error;return}status.textContent=`${d.status}  ${d.progress}/${d.total}（${d.percent||0}%）\n${d.message}${d.error?'\n错误：'+d.error:''}\n输出目录：${d.colored_dir}`;logs.textContent=(d.logs||[]).join('\n');logs.scrollTop=logs.scrollHeight;if(d.status==='done'){files.innerHTML='<p>输出已完成：'+d.colored_dir+'</p>'}else if(d.status!=='error')setTimeout(()=>poll(id),1000)}
+if(activeJobId){poll(activeJobId)}else{fetch('/api/jobs/latest').then(r=>r.json()).then(d=>{if(d.job_id){activeJobId=d.job_id;localStorage.setItem('comfyinkbloom.activeJobId',activeJobId);poll(activeJobId)}}).catch(()=>{})}
 </script></body></html>
