@@ -4,15 +4,17 @@ import json
 import os
 from pathlib import Path
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from typing import Callable
 
 import cv2
 import numpy as np
 from PIL import Image
 
-from .colorizer import ColorSettings
+from .colorizer import ColorSettings, MultiReferenceColorizer
 from .documents import result_name
-from .paths import MODELS, ROOT
+from .paths import MODELS, ROOT, resource_path
 
 
 ProgressCallback = Callable[[str, int, int, str], None]
@@ -29,7 +31,10 @@ class CobraColorizer:
         self.root = MODELS / "cobra"
         self.repo = self.root / "Cobra"
         self.python = self.root / ".venv" / "Scripts" / "python.exe"
-        self.worker = self.root / "inkbloom_worker.py"
+        # Keep the worker shipped with the application in sync with the
+        # scheduler. The copy inside the model directory is legacy and does
+        # not understand global page indices used by parallel workers.
+        self.worker = resource_path("tools/cobra_worker.py")
         self.log_path = ROOT / "InkBloom-Cobra.log"
         self.reference_palettes = [self._palette_stats(path) for path in self.references]
         self.reference_chroma_levels = [
@@ -48,6 +53,12 @@ class CobraColorizer:
         self.group_reference: dict[Path, int] = {}
         self.page_reference: dict[Path, int] = {}
         self.auto_references_by_group: dict[Path, list] = {}
+        self.skin_model = None
+        if settings.cobra_skin_recovery:
+            try:
+                self.skin_model = MultiReferenceColorizer([], ColorSettings(engine="ai"))
+            except Exception:
+                self.skin_model = None
 
     @classmethod
     def available(cls) -> bool:
@@ -219,6 +230,38 @@ class CobraColorizer:
         color_strength = float(np.clip(settings.cobra_color_strength, 0.55, 1.20))
         result_lab[..., 0] = original_lab[..., 0] * 0.62 + result_lab[..., 0] * 0.38
         chroma = result_lab[..., 1:] * color_strength
+        # Cobra often predicts the correct skin hue but with near-neutral
+        # chroma. Recover that signal adaptively instead of applying one
+        # global saturation preset: low-chroma warm regions get filled, while
+        # genuinely neutral paper remains neutral.
+        chroma_norm = np.linalg.norm(chroma, axis=2, keepdims=True)
+        low_chroma = np.clip((30.0 - chroma_norm) / 30.0, 0.0, 1.0)
+        warm_signal = np.clip(chroma[..., 0] / 14.0, 0.0, 1.0)
+        warm_signal = np.maximum(warm_signal, np.clip(chroma[..., 1] / 20.0, 0.0, 1.0) * 0.55)
+        warm_signal = warm_signal[..., None]
+        adaptive_gain = 1.0 + low_chroma * (0.35 + warm_signal * 0.75)
+        chroma *= adaptive_gain
+        if self.skin_model is not None:
+            # The general colorizer is too aggressive for a whole manga page,
+            # but its chroma prediction is useful as a skin-region guide.
+            ai_ab = self.skin_model._automatic_ab(original_lab[..., 0])
+            ai_norm = np.linalg.norm(ai_ab, axis=2)
+            ai_warm = np.maximum(
+                np.clip((ai_ab[..., 0] + 5.0) / 20.0, 0.0, 1.0),
+                np.clip((ai_ab[..., 1] - 6.0) / 18.0, 0.0, 1.0),
+            )
+            ai_light = np.clip((original_lab[..., 0] - 25.0) / 68.0, 0.0, 1.0)
+            ai_confidence = np.clip((ai_norm - 5.0) / 18.0, 0.0, 1.0)
+            # Do not gate this recovery on Cobra's own chroma: that was the
+            # reason pale skin stayed white when Cobra returned neutral a/b.
+            # The AI prediction is used only as a warm, light, confident local
+            # guide, so clothes and paper remain governed by Cobra.
+            skin_hint = (ai_warm * ai_light * ai_confidence)[..., None]
+            skin_hint = cv2.GaussianBlur(skin_hint.astype(np.float32), (0, 0), 2.0)
+            if skin_hint.ndim == 2:
+                skin_hint = skin_hint[..., None]
+            skin_hint = np.clip(skin_hint * 0.78, 0.0, 0.78)
+            chroma = chroma * (1.0 - skin_hint) + ai_ab * skin_hint
         gray = cv2.cvtColor(original, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
         guide = gray
         filtered = np.stack(
@@ -273,18 +316,11 @@ class CobraColorizer:
         warm_wash = (
             light_area * far_from_lines * low_confidence_color * warm_bias
         )[..., None]
-        warm_wash = np.clip(warm_wash * 2.15, 0.0, 1.0)
+        # Keep the cleanup conservative. The old multiplier also suppressed
+        # pale skin and hair highlights, leaving character regions uncolored.
+        warm_wash = np.clip(warm_wash * 1.15, 0.0, 1.0)
         if np.any(warm_wash > 0.01):
-            chroma *= 1.0 - warm_wash * 0.90
-        strong_warm_fill = (
-            light_area
-            * far_from_lines
-            * warm_bias
-            * np.clip((chroma_amount - 38.0) / 52.0, 0.0, 1.0)
-        )[..., None]
-        strong_warm_fill = np.clip(strong_warm_fill * 1.35, 0.0, 1.0)
-        if np.any(strong_warm_fill > 0.01):
-            chroma *= 1.0 - strong_warm_fill * 0.58
+            chroma *= 1.0 - warm_wash * 0.42
         # Speech balloons and caption boxes should usually stay white. Cobra
         # often treats them as generic bright regions and paints their interiors
         # yellow/orange, which hurts readability and makes the page feel dirty.
@@ -348,6 +384,120 @@ class CobraColorizer:
         output_dir: Path,
         callback: ProgressCallback | None = None,
     ) -> list[Path]:
+        return self._colorize_batch_parallel(pages, output_dir, callback)
+
+    def _colorize_batch_parallel(
+        self,
+        pages: list[Path],
+        output_dir: Path,
+        callback: ProgressCallback | None = None,
+    ) -> list[Path]:
+        if not self.available():
+            raise RuntimeError("Cobra 尚未安装完成，请运行 install-cobra.ps1")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        if not pages:
+            return []
+
+        gpu_ids = [item.strip() for item in str(self.settings.cobra_gpu_ids).split(",") if item.strip()] or ["0"]
+        per_gpu = max(1, min(8, int(self.settings.cobra_workers_per_gpu)))
+        slots = [(gpu, index) for gpu in gpu_ids for index in range(per_gpu)]
+        slots = slots[:min(len(slots), len(pages))]
+        assignments = [pages[index::len(slots)] for index in range(len(slots))]
+        total = len(pages)
+        completed: dict[int, Path] = {}
+        callback_lock = threading.Lock()
+        log_lock = threading.Lock()
+        if callback:
+            callback("engine", 0, 1, f"正在启动 Cobra：{len(slots)} 个并行 worker（{len(gpu_ids)} 张 GPU）")
+
+        def run_worker(worker_index: int, gpu_id: str, worker_pages: list[Path]) -> None:
+            if not worker_pages:
+                return
+            global_indices = [pages.index(page) + 1 for page in worker_pages]
+            raw_dir = output_dir.parent / "cobra-raw" / f"worker-{worker_index:02d}"
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            config = {
+                "repo": str(self.repo), "pages": [str(path.resolve()) for path in worker_pages],
+                "page_indices": global_indices, "global_total": total,
+                "references": [str(path) for path in self.references],
+                "reference_plan": self.reference_plan, "output_dir": str(raw_dir.resolve()),
+                "style": "line + shadow" if self.settings.cobra_style == "line_shadow" else "line",
+                "steps": max(4, min(30, int(self.settings.cobra_steps))),
+                "top_k": max(1, min(20, int(self.settings.cobra_top_k))),
+                "seed": int(self.settings.cobra_seed), "consistency": bool(self.settings.cobra_consistency),
+            }
+            config_path = output_dir.parent / f"cobra-job-{worker_index:02d}.json"
+            config_path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
+            env = os.environ.copy()
+            env["CUDA_VISIBLE_DEVICES"] = gpu_id
+            env["HF_HOME"] = str(self.root / "huggingface")
+            env["HUGGINGFACE_HUB_CACHE"] = str(self.root / "huggingface")
+            env["TORCH_HOME"] = str(self.root / "torch")
+            env["INKBLOOM_COBRA_CACHE"] = str(self.root / "huggingface")
+            env["INKBLOOM_COBRA_OFFLINE"] = "1"; env["HF_HUB_OFFLINE"] = "1"; env["PYTHONUTF8"] = "1"
+            process = subprocess.Popen(
+                [str(self.python), "-u", str(self.worker), str(config_path)], cwd=self.root, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            try:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    with log_lock:
+                        with self.log_path.open("a", encoding="utf-8") as log:
+                            log.write(f"[GPU {gpu_id} worker {worker_index}] {line}")
+                    line = line.strip()
+                    if not line.startswith("INKBLOOM_JSON:"):
+                        continue
+                    event = json.loads(line.removeprefix("INKBLOOM_JSON:"))
+                    kind = event.get("event"); current = int(event.get("current", 0))
+                    message = str(event.get("message", "Cobra 正在处理"))
+                    with callback_lock:
+                        if kind == "ready":
+                            if callback:
+                                callback("engine", 1, 1, message)
+                                callback("reference", 1, 1, f"已载入 {len(self.references)} 张样例图")
+                                callback("lineart", 1, 1, "将保留原始线稿与网点结构")
+                        elif kind == "memory":
+                            if callback: callback("reference", 0, 1, message)
+                        elif kind == "page_start":
+                            if callback: callback("stage1", current - 1, total, message)
+                        elif kind in {"page_done", "page_failed"}:
+                            page = pages[current - 1]; destination = output_dir / result_name(page, current)
+                            raw = raw_dir / f"cobra_{current:05d}.png"
+                            if kind == "page_done":
+                                if not raw.exists(): raise RuntimeError(f"Cobra 缺少第 {current} 页输出")
+                                self._finish_image(page, raw, destination, self.settings)
+                            else:
+                                Image.open(page).convert("RGB").save(destination, quality=96, subsampling=0)
+                            completed[current] = destination
+                            if callback:
+                                callback("stage1", current, total, message)
+                                callback("stage2", current, total, f"第 {current} 页色彩清理完成")
+                                callback("layers", current, total, f"第 {current} 页已保存，可立即查看高清预览")
+                        elif kind == "page_retry":
+                            if callback: callback("stage1", current - 1, total, message)
+                        elif kind == "error":
+                            raise RuntimeError(message)
+            except Exception:
+                if process.poll() is None:
+                    process.terminate()
+                raise
+            finally:
+                if process.stdout: process.stdout.close()
+            code = process.wait()
+            if code != 0:
+                raise RuntimeError(f"Cobra worker GPU {gpu_id} 异常退出（代码 {code}），请查看 {self.log_path}")
+
+        with ThreadPoolExecutor(max_workers=len(slots)) as pool:
+            futures = [pool.submit(run_worker, index, gpu, assignments[index]) for index, (gpu, _slot) in enumerate(slots)]
+            for future in as_completed(futures):
+                future.result()
+        if len(completed) != total:
+            missing = sorted(set(range(1, total + 1)) - set(completed))
+            raise RuntimeError(f"Cobra 未生成页面：{missing[:8]}")
+        return [completed[index] for index in range(1, total + 1)]
+
         if not self.available():
             raise RuntimeError("Cobra 尚未安装完成，请运行 install-cobra.ps1")
 

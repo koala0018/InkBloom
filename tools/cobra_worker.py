@@ -19,6 +19,10 @@ def emit(event: str, **payload) -> None:
 
 def main() -> None:
     config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    # GPU workers should not each create a full CPU thread pool. With several
+    # workers per GPU that otherwise saturates the host and starves CUDA.
+    for name in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+        os.environ.setdefault(name, "1")
     repo = Path(config["repo"]).resolve()
     os.chdir(repo)
     # Cobra ships a customized Diffusers fork. Use the copy beside the
@@ -27,6 +31,13 @@ def main() -> None:
     sys.path.insert(0, str(repo / "diffusers" / "src"))
     sys.path.insert(0, str(repo))
     import app as cobra
+    cobra.torch.set_num_threads(1)
+    try:
+        cobra.torch.set_num_interop_threads(1)
+    except RuntimeError:
+        pass
+    if hasattr(cobra, "cv2"):
+        cobra.cv2.setNumThreads(1)
 
     emit("ready", message="Cobra 模型加载完成")
     references = [Path(path).resolve() for path in config["references"]]
@@ -45,10 +56,13 @@ def main() -> None:
         ),
     )
     pages = [Path(path).resolve() for path in config["pages"]]
+    page_indices = [int(value) for value in config.get("page_indices", range(1, len(pages) + 1))]
+    global_total = int(config.get("global_total", len(pages)))
     output_dir = Path(config["output_dir"]).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for index, page in enumerate(pages, 1):
+    for local_index, page in enumerate(pages, 1):
+        index = page_indices[local_index - 1]
         plan = config.get("reference_plan") or []
         selected = plan[index - 1] if index - 1 < len(plan) else list(range(len(all_files)))
         files = [all_files[int(item)] for item in selected if int(item) < len(all_files)]
@@ -65,7 +79,7 @@ def main() -> None:
         emit(
             "page_start",
             current=index,
-            total=len(pages),
+            total=global_total,
             message=f"第 {index} 页：检索多张样例并生成颜色",
         )
         last_error = None
@@ -91,7 +105,7 @@ def main() -> None:
                 emit(
                     "page_done",
                     current=index,
-                    total=len(pages),
+                    total=global_total,
                     message=f"第 {index} 页 Cobra 上色完成",
                 )
                 last_error = None
@@ -104,14 +118,14 @@ def main() -> None:
                     emit(
                         "page_retry",
                         current=index,
-                        total=len(pages),
+                        total=global_total,
                         message=f"第 {index} 页处理异常，正在自动重试：{exc}",
                     )
         if last_error is not None:
             emit(
                 "page_failed",
                 current=index,
-                total=len(pages),
+                total=global_total,
                 message=f"第 {index} 页重试失败，已保留原页占位：{last_error}",
             )
 

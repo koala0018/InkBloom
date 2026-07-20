@@ -7,6 +7,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/engine.css">
+  <link rel="stylesheet" href="/static/presets.css">
   <title>InkBloom · 多参考 AI 漫画上色</title>
 </head>
 <body>
@@ -45,6 +46,27 @@
           <span id="ref-state"><strong>＋ 添加多张彩色样例</strong><small>人物、服装、场景越完整越容易匹配</small></span>
         </label>
 
+        {% if reference_presets %}
+        <div class="preset-panel">
+          <strong>可选作品参考预设</strong>
+          <small>勾选后会加入本次参考图；PDF 内自动识别的官方彩页仍会保留。</small>
+          {% for preset in reference_presets %}
+          <details class="preset-group">
+            <summary>{{ preset.title }}</summary>
+            <div class="preset-grid">
+              {% for item in preset["items"] %}
+              <label class="preset-card">
+                <input type="checkbox" name="reference_presets" value="{{ item.value }}">
+                <img src="{{ item.image }}" alt="{{ item.label }}">
+                <span><b>{{ item.label }}</b><small>{{ item.hint }}</small></span>
+              </label>
+              {% endfor %}
+            </div>
+          </details>
+          {% endfor %}
+        </div>
+        {% endif %}
+
         <fieldset class="native-options cobra-options">
           <legend>Cobra 多参考参数</legend>
           <label class="select-label">输入类型
@@ -55,6 +77,9 @@
           </label>
           <label>推理步数 <output id="cobra-steps-out">10</output><input name="cobra_steps" type="range" min="6" max="24" step="1" value="10"></label>
           <label>参考检索 Top-K <output id="cobra-topk-out">5</output><input name="cobra_top_k" type="range" min="1" max="12" step="1" value="5"></label>
+          <label>并行 GPU 编号（0=RTX 5060 Ti，逗号分隔）<input name="cobra_gpu_ids" type="text" value="0" placeholder="例如：0,1"></label>
+          <label>每张 GPU 并行任务数 <output id="cobra-workers-out">1</output><input name="cobra_workers_per_gpu" type="range" min="1" max="4" step="1" value="1"></label>
+          <label class="toggle"><input type="checkbox" name="cobra_skin_recovery" checked><span><b>AI 辅助补全人物肤色</b><small>只提取 AI 的肤色候选区域与 Cobra 局部融合，不替换整页颜色；每个 worker 限制为单线程，避免 CPU 满载。</small></span></label>
           <label>色彩强度 <output id="cobra-color-out">105%</output><input name="cobra_color_strength" type="range" min="0.65" max="1.2" step="0.01" value="1.05"></label>
           <label>原线稿保护 <output id="cobra-lines-out">88%</output><input name="cobra_preserve_lines" type="range" min="0.5" max="1" step="0.01" value="0.88"></label>
           <label class="toggle"><input type="checkbox" name="cobra_consistency" checked><span><b>连续页面色调锁定</b><small>同一 PDF 或章节沿用稳定随机种子，并以样例图色板为主、上一页为辅，减少突然换色和脏色。</small></span></label>
@@ -94,6 +119,8 @@
           <label>饱和度 <output id="sat-out">105%</output><input name="saturation" type="range" min="0.5" max="1.4" step="0.01" value="1.05"></label>
           <label>上色强度 <output id="str-out">95%</output><input name="strength" type="range" min="0.5" max="1" step="0.01" value="0.95"></label>
           <label>线稿保护 <output id="line-out">82%</output><input name="line_protection" type="range" min="0.4" max="1" step="0.01" value="0.82"></label>
+          <label>无参考图：模型色彩增强 <output id="no-ref-color-out">135%</output><input name="no_reference_color_boost" type="range" min="1" max="2" step="0.01" value="1.35"></label>
+          <label>无参考图：平涂填充增强 <output id="no-ref-fill-out">22%</output><input name="no_reference_fill_boost" type="range" min="0" max="0.6" step="0.01" value="0.22"></label>
         </details>
 
         <details class="advanced lineart-options">

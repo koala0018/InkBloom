@@ -36,6 +36,9 @@ for (const [name, id, suffix] of [
   ['cobra_color_strength','cobra-color-out','%'],
   ['cobra_preserve_lines','cobra-lines-out','%'],
   ['cobra_consistency_strength','cobra-consistency-out','%']
+  ,['cobra_workers_per_gpu','cobra-workers-out','']
+  ,['no_reference_color_boost','no-ref-color-out','%']
+  ,['no_reference_fill_boost','no-ref-fill-out','%']
 ]) {
   const input = form.elements[name];
   if (!input) continue;

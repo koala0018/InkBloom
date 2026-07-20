@@ -1,0 +1,36 @@
+{
+  "id": "bokuyaba",
+  "title": "我心中有危险的东西 / 我內心的糟糕念頭",
+  "aliases": [
+    "我心中有危险的东西",
+    "我內心的糟糕念頭",
+    "我心中的野兽",
+    "僕の心のヤバイやつ",
+    "boku no kokoro no yabai yatsu",
+    "the dangers in my heart",
+    "bokuyaba"
+  ],
+  "items": [
+    {
+      "id": "volume01_cover_from_input",
+      "label": "第 1 卷封面：角色主设定",
+      "file": "bokuyaba-input-volume01-cover.png",
+      "priority": 95,
+      "hint": "最适合作为主参考：山田发色、校服、肤色、整体漫画封面色调稳定。"
+    },
+    {
+      "id": "volume01_color_spread_from_input",
+      "label": "第 1 卷彩色插图：室内/群像",
+      "file": "bokuyaba-input-color-spread.png",
+      "priority": 90,
+      "hint": "适合补充室内场景、木色、多人服装和日常氛围。"
+    },
+    {
+      "id": "anime_library_key_visual",
+      "label": "动画视觉图：图书馆/校服辅助",
+      "file": "bokuyaba-anime-teaser-library.jpg",
+      "priority": 55,
+      "hint": "只建议作为辅助参考；动画光影更重，不应主导漫画页色调。"
+    }
+  ]
+}

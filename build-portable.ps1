@@ -7,13 +7,20 @@ $sourceStyle2Paints = Join-Path $root 'models\style2paints'
 $portableStyle2Paints = Join-Path $root 'release\InkBloom\models\style2paints'
 $preserveRoot = Join-Path $root 'work\build-preserve'
 $preservedStyle2Paints = Join-Path $preserveRoot 'style2paints'
+$buildPython = Join-Path $root '.venv-build\Scripts\python.exe'
+$buildPythonArgs = @()
+if (!(Test-Path -LiteralPath $buildPython)) {
+  $buildPython = 'python'
+  $buildPythonArgs = @('-S')
+  $env:PYTHONPATH = "$root\.deps"
+}
 if (!(Test-Path -LiteralPath (Join-Path $sourceStyle2Paints 'READY')) -and
     (Test-Path -LiteralPath (Join-Path $portableStyle2Paints 'READY'))) {
   New-Item -ItemType Directory -Force $preserveRoot | Out-Null
   Remove-Item -Recurse -Force $preservedStyle2Paints -ErrorAction SilentlyContinue
   Move-Item -LiteralPath $portableStyle2Paints -Destination $preservedStyle2Paints
 }
-.\.venv-build\Scripts\python.exe -m PyInstaller --paths .deps --noconfirm --clean --onedir --console --name InkBloom `
+& $buildPython @buildPythonArgs -m PyInstaller --paths .deps --noconfirm --clean --onedir --console --name InkBloom `
   --add-data "templates;templates" --add-data "static;static" `
   --add-data "assets\models;assets\models" `
   --add-data "install-style2paints.ps1;." `

@@ -31,6 +31,9 @@ class ColorSettings:
     cobra_color_strength: float = 1.05
     cobra_consistency: bool = True
     cobra_consistency_strength: float = 0.72
+    cobra_gpu_ids: str = "0"
+    cobra_workers_per_gpu: int = 1
+    cobra_skin_recovery: bool = True
     cobra_reference_confirmation: bool = False
     cobra_auto_color_reference: bool = True
     lineart_enhance: bool = False
@@ -40,6 +43,8 @@ class ColorSettings:
     lineart_weight: float = 0.55
     lineart_prompt: str = "refined clean detailed manga line art, beautiful anime style, sharp expressive face, elegant hair strands, high quality black and white line drawing"
     lineart_negative: str = "color, gray background, messy artifacts, blurry, low quality, extra fingers, broken face, changed panel layout, unreadable text"
+    no_reference_color_boost: float = 1.35
+    no_reference_fill_boost: float = 0.22
 
 
 def _rgb(path: Path) -> np.ndarray:
@@ -238,6 +243,25 @@ class MultiReferenceColorizer:
             interpolation=cv2.INTER_CUBIC,
         )
 
+    def _enhance_no_reference_ab(self, ab: np.ndarray) -> np.ndarray:
+        """Increase confident model chroma without applying a global color veil.
+
+        The grayscale colorization model is intentionally conservative on manga
+        line art. Normalize its per-pixel chroma distribution first, then boost
+        only pixels that already have a color prediction. This fills large flat
+        regions while keeping paper and ink neutral.
+        """
+        chroma = np.linalg.norm(ab, axis=2, keepdims=True)
+        valid = chroma[..., 0] > 2.0
+        if not np.any(valid):
+            return ab
+        median = max(float(np.median(chroma[..., 0][valid])), 1.0)
+        target = max(30.0, median * 1.35)
+        adaptive_gain = np.clip(target / median, 1.0, 1.8)
+        confidence = np.clip(chroma / 24.0, 0.0, 1.0)
+        gain = adaptive_gain * (1.0 + (1.0 - confidence) * self.settings.no_reference_fill_boost)
+        return ab * gain * float(np.clip(self.settings.no_reference_color_boost, 1.0, 2.0)) / 1.35
+
     @staticmethod
     def _default_ab(l_full: np.ndarray) -> np.ndarray:
         palette = np.array(
@@ -255,6 +279,8 @@ class MultiReferenceColorizer:
 
         if self.session is not None:
             ab = self._automatic_ab(l_full)
+            if self.matcher is None:
+                ab = self._enhance_no_reference_ab(ab)
         else:
             ab = self._default_ab(l_full)
 
