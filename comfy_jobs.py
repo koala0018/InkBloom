@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import shutil
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from comfy_colorizer import run_parallel
+from comic_colorizer.documents import collect_inputs, natural_key, safe_component
+
+
+@dataclass
+class Job:
+    id: str
+    title: str
+    root: Path
+    positive: str
+    negative: str
+    width: int | None
+    height: int | None
+    status: str = "queued"
+    progress: int = 0
+    total: int = 0
+    message: str = "等待"
+    error: str | None = None
+    logs: list[str] = field(default_factory=list)
+
+
+class JobManager:
+    def __init__(self, work: Path):
+        self.work = work
+        self.jobs: dict[str, Job] = {}
+        self.lock = threading.Lock()
+
+    def create(self, uploads: list[Path], title: str, positive: str, negative: str, width: int | None, height: int | None) -> Job:
+        job_id = uuid.uuid4().hex[:10]
+        root = self.work / f"{safe_component(title, '漫画')}_{job_id}"
+        root.mkdir(parents=True, exist_ok=True)
+        job = Job(job_id, title, root, positive, negative, width, height)
+        self.jobs[job_id] = job
+        threading.Thread(target=self._run, args=(job, uploads), daemon=True).start()
+        return job
+
+    def _run(self, job: Job, uploads: list[Path]) -> None:
+        try:
+            page_dir = job.root / "pages"
+            colored = job.root / "colored"
+            job.status, job.message = "extract", "正在拆分输入文件"
+            pages, _kind, _manifest = collect_inputs(uploads, page_dir, on_progress=lambda done, total, msg: self._update(job, done, total, msg))
+            pages = sorted(pages, key=natural_key)
+            if not pages:
+                raise ValueError("输入中没有找到可处理的图片页面")
+            job.total = len(pages)
+            job.status, job.progress, job.message = "comfy", 0, "等待两个 ComfyUI 服务"
+            run_parallel(pages, colored, job.positive, job.negative, job.width, job.height, lambda done, total, msg: self._update(job, done, total, msg))
+            job.status, job.progress, job.message = "done", job.total, f"完成：{job.total} 页"
+        except Exception as exc:
+            job.status, job.error, job.message = "error", str(exc), str(exc)
+
+    @staticmethod
+    def _update(job: Job, done: int, total: int, message: str) -> None:
+        job.progress, job.total, job.message = done, total, message
+
+    def status_json(self, job: Job) -> dict:
+        return {"id": job.id, "title": job.title, "status": job.status, "progress": job.progress, "total": job.total, "message": job.message, "error": job.error, "logs": job.logs, "work_dir": str(job.root), "colored_dir": str(job.root / 'colored')}
