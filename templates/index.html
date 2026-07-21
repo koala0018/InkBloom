@@ -7,8 +7,9 @@
 <fieldset><legend>工作流参数</legend><label>正向提示词<textarea name="positive">给漫画进行上色，颜色不要太淡</textarea></label><label>负向提示词<textarea name="negative">低饱和，灰度，褪色，未上色，模糊，重影，文字变形</textarea></label><div class="grid"><label>宽度（留空使用默认）<input name="width" type="number" min="64" step="8" placeholder="工作流默认"></label><label>高度（留空使用默认）<input name="height" type="number" min="64" step="8" placeholder="工作流默认"></label></div><label>任务名称<input name="title" placeholder="漫画上色"></label></fieldset><button>开始双卡并行上色</button></form>
 <h2>任务进度</h2><div id="status" class="status">尚未提交任务</div><h3>运行日志</h3><pre id="logs" class="logs">等待任务…</pre><div id="files"></div>
 <script>
-const services=document.querySelector('#services'),status=document.querySelector('#status'),logs=document.querySelector('#logs'),files=document.querySelector('#files');
+const services=document.querySelector('#services'),status=document.querySelector('#status'),logs=document.querySelector('#logs'),files=document.querySelector('#files'),form=document.querySelector('#form');
 let activeJobId=localStorage.getItem('comfyinkbloom.activeJobId');
+fetch('/api/settings').then(r=>r.json()).then(saved=>{for(const name of ['positive','negative','width','height','title']){if(saved[name]!==undefined)form.elements[name].value=saved[name]}}).catch(()=>{});
 const nativeFetch=window.fetch.bind(window);
 window.fetch=async function(input, init){
   const response=await nativeFetch(input, init);

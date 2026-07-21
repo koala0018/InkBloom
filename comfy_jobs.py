@@ -61,7 +61,7 @@ class JobManager:
             job.total = len(pages)
             job.status, job.progress, job.message = "comfy", 0, "等待两个 ComfyUI 服务"
             job.log(f"拆页完成，共 {job.total} 页；等待 8188/8189")
-            run_parallel(pages, colored, job.positive, job.negative, job.width, job.height, lambda done, total, msg: self._update(job, done, total, msg))
+            run_parallel(pages, colored, job.positive, job.negative, job.width, job.height, lambda done, total, msg: self._update(job, done, total, msg), page_root=page_dir)
             job.status, job.progress, job.message = "done", job.total, f"完成：{job.total} 页"
             job.log(f"任务完成，共生成 {job.total} 页")
         except Exception as exc:

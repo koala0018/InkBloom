@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -11,6 +12,13 @@ import uuid
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Callable
+
+
+
+def safe_component(value: str, fallback: str = "page", max_length: int = 100) -> str:
+    value = re.sub(r"[\x00-\x1f<>:\"/\\|?*]+", "_", value).strip(" ._")
+    value = re.sub(r"\s+", " ", value)
+    return value[:max_length] or fallback
 
 
 DEFAULT_WORKFLOWS = [
@@ -75,8 +83,9 @@ def build_prompt(image_name: str, positive: str, negative: str, width: int | Non
     _node(nodes, 155, "easy int", {"value": h})
     _node(nodes, 139, "EmptyLatentImage", {"width": ["154", 0], "height": ["155", 0], "batch_size": ["137", 0]})
     _node(nodes, 130, "KSampler", {"model": ["153", 0], "positive": ["129", 0], "negative": ["128", 0], "latent_image": ["139", 0], "seed": seed, "steps": steps, "cfg": cfg, "sampler_name": sampler, "scheduler": scheduler, "denoise": denoise})
-    _node(nodes, 131, "easy cleanGpuUsed", {"anything": ["130", 0]})
-    _node(nodes, 132, "VAEDecode", {"samples": ["131", 0], "vae": ["153", 2]})
+    # Do not inject easy cleanGpuUsed here. It clears ComfyUI's model cache
+    # after every page, forcing Qwen to be loaded again for the next page.
+    _node(nodes, 132, "VAEDecode", {"samples": ["130", 0], "vae": ["153", 2]})
     _node(nodes, 121, "SaveImage", {"images": ["132", 0], "filename_prefix": "InkBloom_Comfy"})
     return nodes
 
@@ -125,7 +134,21 @@ def services() -> list[ComfyService]:
     return [ComfyService("RTX 2080 Ti", os.environ.get("INKBLOOM_COMFY_2080_URL", "http://127.0.0.1:8188")), ComfyService("RTX 5060 Ti", os.environ.get("INKBLOOM_COMFY_5060_URL", "http://127.0.0.1:8189"))]
 
 
-def run_parallel(pages: list[Path], out_dir: Path, positive: str, negative: str, width: int | None, height: int | None, on_page: Callable[[int, int, str], None] | None = None) -> None:
+def _output_relative_path(index: int, page: Path, page_root: Path | None) -> Path:
+    """Keep upload/document/chapter folders visible in the colored output."""
+    if page_root is not None:
+        try:
+            relative = page.relative_to(page_root)
+        except ValueError:
+            relative = Path(page.name)
+    else:
+        relative = Path(page.name)
+    parent = Path(*[p for p in relative.parent.parts if p not in {"", "."}])
+    stem = safe_component(relative.stem, f"page_{index + 1:05d}", max_length=100)
+    return parent / f"{index + 1:05d}_{stem}_colored.png"
+
+
+def run_parallel(pages: list[Path], out_dir: Path, positive: str, negative: str, width: int | None, height: int | None, on_page: Callable[[int, int, str], None] | None = None, page_root: Path | None = None) -> None:
     workers = services()
     online: list[ComfyService] = []
     for service in workers:
@@ -141,8 +164,8 @@ def run_parallel(pages: list[Path], out_dir: Path, positive: str, negative: str,
     pending_dir.mkdir(parents=True, exist_ok=True)
 
     def one(index: int, page: Path, service: ComfyService) -> tuple[int, str]:
-        filename = f"{index + 1:05d}_{page.stem}_colored.png"
-        target = pending_dir / filename
+        target = pending_dir / _output_relative_path(index, page, page_root)
+        target.parent.mkdir(parents=True, exist_ok=True)
         service.run(page, positive, negative, width, height, target)
         return index, service.name
 
@@ -162,8 +185,7 @@ def run_parallel(pages: list[Path], out_dir: Path, positive: str, negative: str,
             for future in finished:
                 index, service = running.pop(future)
                 completed_index, service_name = future.result()
-                filename = f"{completed_index + 1:05d}_{pages[completed_index].stem}_colored.png"
-                ready[completed_index] = (service_name, pending_dir / filename)
+                ready[completed_index] = (service_name, pending_dir / _output_relative_path(completed_index, pages[completed_index], page_root))
                 # Reuse the service that just became free; never queue a
                 # second job behind it. This keeps both GPUs busy dynamically.
                 if next_assign < len(pages):

@@ -11,6 +11,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 
 from comfy_colorizer import services, workflow_path
 from comfy_jobs import JobManager
+from app_settings import load as load_settings, save as save_settings
 from comic_colorizer.documents import IMAGE_EXTS, ARCHIVE_EXTS
 
 ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
@@ -21,6 +22,7 @@ UPLOADS.mkdir(parents=True, exist_ok=True)
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024 * 1024
 manager = JobManager(WORK)
+SETTINGS_PATH = ROOT / "settings.json"
 
 
 def save_upload(item, index: int) -> Path:
@@ -39,7 +41,12 @@ def save_upload(item, index: int) -> Path:
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", settings=load_settings(SETTINGS_PATH))
+
+
+@app.get("/api/settings")
+def settings_status():
+    return jsonify(load_settings(SETTINGS_PATH))
 
 
 @app.get("/api/services")
@@ -65,6 +72,7 @@ def create_job():
         value = request.form.get(name, "").strip()
         return int(value) if value else None
     title = request.form.get("title") or Path(items[0].filename).stem
+    save_settings(SETTINGS_PATH, {"positive": positive, "negative": negative, "width": request.form.get("width", ""), "height": request.form.get("height", ""), "title": request.form.get("title", "")})
     job = manager.create(uploads, title, positive, negative, number("width"), number("height"))
     return jsonify({"job_id": job.id})
 
