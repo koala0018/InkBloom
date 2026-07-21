@@ -26,6 +26,8 @@ class Job:
     message: str = "等待"
     error: str | None = None
     logs: list[str] = field(default_factory=list)
+    uploads: list[Path] = field(default_factory=list)
+    cancel_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def log(self, message: str) -> None:
         self.logs.append(f"[{time.strftime('%H:%M:%S')}] {message}")
@@ -42,7 +44,7 @@ class JobManager:
         job_id = uuid.uuid4().hex[:10]
         root = self.work / f"{safe_component(title, '漫画')}_{job_id}"
         root.mkdir(parents=True, exist_ok=True)
-        job = Job(job_id, title, root, positive, negative, width, height)
+        job = Job(job_id, title, root, positive, negative, width, height, uploads=list(uploads))
         job.log("任务已创建，等待拆页")
         self.jobs[job_id] = job
         threading.Thread(target=self._run, args=(job, uploads), daemon=True).start()
@@ -61,10 +63,14 @@ class JobManager:
             job.total = len(pages)
             job.status, job.progress, job.message = "comfy", 0, "等待两个 ComfyUI 服务"
             job.log(f"拆页完成，共 {job.total} 页；等待 8188/8189")
-            run_parallel(pages, colored, job.positive, job.negative, job.width, job.height, lambda done, total, msg: self._update(job, done, total, msg), page_root=page_dir)
+            run_parallel(pages, colored, job.positive, job.negative, job.width, job.height, lambda done, total, msg: self._update(job, done, total, msg), page_root=page_dir, cancel_event=job.cancel_event)
             job.status, job.progress, job.message = "done", job.total, f"完成：{job.total} 页"
             job.log(f"任务完成，共生成 {job.total} 页")
         except Exception as exc:
+            if job.cancel_event.is_set():
+                job.status, job.error, job.message = "canceled", None, "任务已终止"
+                job.log("任务已终止，ComfyUI 正在停止当前工作流")
+                return
             job.status, job.error, job.message = "error", str(exc), str(exc)
             job.log(f"错误：{exc}")
 
@@ -77,3 +83,19 @@ class JobManager:
     def status_json(self, job: Job) -> dict:
         percent = round(job.progress * 100 / job.total, 1) if job.total else 0
         return {"id": job.id, "title": job.title, "status": job.status, "progress": job.progress, "total": job.total, "percent": percent, "message": job.message, "error": job.error, "logs": job.logs[-80:], "work_dir": str(job.root), "colored_dir": str(job.root / 'colored')}
+
+    def cancel(self, job_id: str) -> Job | None:
+        job = self.jobs.get(job_id)
+        if not job or job.status in {"done", "error", "canceled"}:
+            return job
+        job.cancel_event.set()
+        job.status, job.message = "canceling", "正在终止 ComfyUI 工作流"
+        job.log("收到终止请求")
+        return job
+
+    def retry(self, job_id: str) -> Job:
+        old = self.jobs.get(job_id)
+        if not old:
+            raise KeyError(job_id)
+        self.cancel(job_id)
+        return self.create(old.uploads, old.title, old.positive, old.negative, old.width, old.height)

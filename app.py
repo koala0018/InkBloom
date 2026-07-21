@@ -98,6 +98,23 @@ def job_status(job_id: str):
     return jsonify(manager.status_json(job))
 
 
+@app.post("/api/jobs/<job_id>/cancel")
+def cancel_job(job_id: str):
+    job = manager.cancel(job_id)
+    if not job:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify(manager.status_json(job))
+
+
+@app.post("/api/jobs/<job_id>/retry")
+def retry_job(job_id: str):
+    try:
+        job = manager.retry(job_id)
+    except KeyError:
+        return jsonify({"error": "任务不存在"}), 404
+    return jsonify({"job_id": job.id})
+
+
 @app.get("/api/jobs/<job_id>/files/<path:filename>")
 def job_file(job_id: str, filename: str):
     job = manager.jobs.get(job_id)

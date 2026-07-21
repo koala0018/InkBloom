@@ -12,6 +12,7 @@ import uuid
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Callable
+from threading import Event
 
 
 
@@ -100,7 +101,9 @@ class ComfyService:
         devices = info.get("devices") or []
         return {"name": self.name, "url": self.base_url, "online": True, "device": devices[0].get("name", "") if devices else ""}
 
-    def run(self, image: Path, positive: str, negative: str, width: int | None, height: int | None, output: Path, progress: Callable[[str], None] | None = None) -> None:
+    def run(self, image: Path, positive: str, negative: str, width: int | None, height: int | None, output: Path, progress: Callable[[str], None] | None = None, cancel_event: Event | None = None) -> None:
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("任务已取消")
         upload = _multipart(f"{self.base_url}/upload/image", {"type": "input", "overwrite": "true"}, "image", image)
         image_name = upload.get("name") or image.name
         prompt_id = _json(f"{self.base_url}/prompt", {"prompt": build_prompt(image_name, positive, negative, width, height), "client_id": f"inkbloom-{uuid.uuid4().hex}"}).get("prompt_id")
@@ -110,6 +113,12 @@ class ComfyService:
             progress(f"{self.name} 已提交")
         deadline = time.time() + 1800
         while time.time() < deadline:
+            if cancel_event and cancel_event.is_set():
+                try:
+                    _json(f"{self.base_url}/interrupt", {}, timeout=5)
+                except Exception:
+                    pass
+                raise RuntimeError("任务已取消")
             history = _json(f"{self.base_url}/history/{urllib.parse.quote(str(prompt_id))}", timeout=30)
             item = history.get(str(prompt_id))
             if item and item.get("status", {}).get("completed"):
@@ -148,7 +157,7 @@ def _output_relative_path(index: int, page: Path, page_root: Path | None) -> Pat
     return parent / f"{index + 1:05d}_{stem}_colored.png"
 
 
-def run_parallel(pages: list[Path], out_dir: Path, positive: str, negative: str, width: int | None, height: int | None, on_page: Callable[[int, int, str], None] | None = None, page_root: Path | None = None) -> None:
+def run_parallel(pages: list[Path], out_dir: Path, positive: str, negative: str, width: int | None, height: int | None, on_page: Callable[[int, int, str], None] | None = None, page_root: Path | None = None, cancel_event: Event | None = None) -> None:
     workers = services()
     online: list[ComfyService] = []
     for service in workers:
@@ -166,7 +175,7 @@ def run_parallel(pages: list[Path], out_dir: Path, positive: str, negative: str,
     def one(index: int, page: Path, service: ComfyService) -> tuple[int, str]:
         target = pending_dir / _output_relative_path(index, page, page_root)
         target.parent.mkdir(parents=True, exist_ok=True)
-        service.run(page, positive, negative, width, height, target)
+        service.run(page, positive, negative, width, height, target, cancel_event=cancel_event)
         return index, service.name
 
     ready: dict[int, tuple[str, Path]] = {}
